@@ -438,6 +438,180 @@ def get_enumerator_statistics(constraints_df: pd.DataFrame, logic_df: pd.DataFra
     
     return stats_df
 
+def get_comprehensive_error_analysis(constraints_df: pd.DataFrame, logic_df: pd.DataFrame) -> Dict:
+    """Generate comprehensive error analysis summary"""
+    analysis = {
+        'error_type_overview': {},
+        'error_rate_by_enumerator': [],
+        'enumerators_without_errors': [],
+        'most_common_variables': {},
+        'strange_values': [],
+        'overall_stats': {}
+    }
+    
+    # Combine all errors
+    all_errors = []
+    
+    if constraints_df is not None and len(constraints_df) > 0:
+        constraint_errors = constraints_df.copy()
+        constraint_errors['error_category'] = 'Constraint'
+        all_errors.append(constraint_errors)
+    
+    if logic_df is not None and len(logic_df) > 0:
+        logic_errors = logic_df.copy()
+        logic_errors['error_category'] = 'Logic'
+        all_errors.append(logic_errors)
+    
+    if not all_errors:
+        return analysis
+    
+    combined_errors = pd.concat(all_errors, ignore_index=True)
+    
+    # 1. Error Type Overview
+    id_col = get_unique_id_column(combined_errors)
+    unique_farmers = combined_errors[id_col].nunique() if id_col else 0
+    
+    analysis['error_type_overview'] = {
+        'Total Constraint Errors': len(constraints_df) if constraints_df is not None else 0,
+        'Total Logic Errors': len(logic_df) if logic_df is not None else 0,
+        'Total Errors': len(combined_errors),
+        'Unique Farmers Affected': unique_farmers
+    }
+    
+    # 2. Error Rate by Enumerator
+    enumerator_analysis = []
+    for enumerator in VALID_ENUMERATORS:
+        enum_errors = combined_errors[combined_errors['username'] == enumerator]
+        constraint_count = len(enum_errors[enum_errors['error_category'] == 'Constraint'])
+        logic_count = len(enum_errors[enum_errors['error_category'] == 'Logic'])
+        total_count = len(enum_errors)
+        
+        if total_count > 0:
+            # Get corrections
+            existing_corrections = load_existing_corrections()
+            solved = 0
+            if existing_corrections is not None:
+                solved = len(existing_corrections[existing_corrections['corrected_by'] == enumerator])
+            
+            error_rate = (total_count / analysis['error_type_overview']['Total Errors'] * 100) if analysis['error_type_overview']['Total Errors'] > 0 else 0
+            
+            enumerator_analysis.append({
+                'Username': enumerator,
+                'Constraint Errors': constraint_count,
+                'Logic Errors': logic_count,
+                'Total Errors': total_count,
+                'Solved': solved,
+                'Remaining': total_count - solved,
+                'Error Rate (%)': round(error_rate, 2),
+                'Completion Rate (%)': round((solved / total_count * 100), 2) if total_count > 0 else 0
+            })
+    
+    analysis['error_rate_by_enumerator'] = pd.DataFrame(enumerator_analysis).sort_values('Total Errors', ascending=False)
+    
+    # 3. Enumerators Without Errors
+    enumerators_with_errors = set(combined_errors['username'].unique())
+    analysis['enumerators_without_errors'] = [e for e in VALID_ENUMERATORS if e not in enumerators_with_errors]
+    
+    # 4. Most Common Variable Errors
+    variable_counts = combined_errors.groupby(['variable', 'error_category']).size().reset_index(name='count')
+    variable_counts = variable_counts.sort_values('count', ascending=False)
+    
+    analysis['most_common_variables'] = {
+        'top_constraint_variables': variable_counts[variable_counts['error_category'] == 'Constraint'].head(10),
+        'top_logic_variables': variable_counts[variable_counts['error_category'] == 'Logic'].head(10),
+        'overall_top_variables': variable_counts.head(15)
+    }
+    
+    # 5. Strange/Outlier Values Detection
+    strange_values = []
+    
+    # Analyze constraint errors for extreme values
+    if constraints_df is not None and len(constraints_df) > 0:
+        for _, row in constraints_df.iterrows():
+            try:
+                value = float(row['value'])
+                
+                # Check for suspiciously large values
+                if value > 100000:
+                    strange_values.append({
+                        'Type': 'Constraint - Extremely Large',
+                        'Variable': row['variable'],
+                        'Value': value,
+                        'Username': row.get('username', 'N/A'),
+                        'Farmer': row.get('farmer_name', 'N/A'),
+                        'Constraint': row.get('constraint', 'N/A')
+                    })
+                
+                # Check for negative values where they shouldn't be
+                if value < 0 and 'temp' not in row['variable'].lower():
+                    strange_values.append({
+                        'Type': 'Constraint - Negative Value',
+                        'Variable': row['variable'],
+                        'Value': value,
+                        'Username': row.get('username', 'N/A'),
+                        'Farmer': row.get('farmer_name', 'N/A'),
+                        'Constraint': row.get('constraint', 'N/A')
+                    })
+            except:
+                # Non-numeric value
+                strange_values.append({
+                    'Type': 'Constraint - Non-Numeric',
+                    'Variable': row['variable'],
+                    'Value': row['value'],
+                    'Username': row.get('username', 'N/A'),
+                    'Farmer': row.get('farmer_name', 'N/A'),
+                    'Constraint': row.get('constraint', 'N/A')
+                })
+    
+    # Analyze logic errors for large discrepancies
+    if logic_df is not None and len(logic_df) > 0:
+        for _, row in logic_df.iterrows():
+            try:
+                farmer_val = float(row['value'])
+                troster_val = float(row['Troster Value'])
+                difference = abs(farmer_val - troster_val)
+                
+                # Large absolute discrepancy
+                if difference > 1000:
+                    strange_values.append({
+                        'Type': 'Logic - Large Discrepancy',
+                        'Variable': row['variable'],
+                        'Value': f"Farmer: {farmer_val}, System: {troster_val}, Diff: {difference}",
+                        'Username': row.get('username', 'N/A'),
+                        'Farmer': row.get('farmer_name', 'N/A'),
+                        'Constraint': f"Difference: {difference}"
+                    })
+                
+                # Large percentage discrepancy (if both values are non-zero)
+                if farmer_val > 0 and troster_val > 0:
+                    percent_diff = abs((farmer_val - troster_val) / troster_val * 100)
+                    if percent_diff > 200:  # More than 200% difference
+                        strange_values.append({
+                            'Type': 'Logic - Large % Difference',
+                            'Variable': row['variable'],
+                            'Value': f"Farmer: {farmer_val}, System: {troster_val}, {percent_diff:.1f}% diff",
+                            'Username': row.get('username', 'N/A'),
+                            'Farmer': row.get('farmer_name', 'N/A'),
+                            'Constraint': f"{percent_diff:.1f}% difference"
+                        })
+            except:
+                pass
+    
+    analysis['strange_values'] = pd.DataFrame(strange_values) if strange_values else pd.DataFrame()
+    
+    # 6. Overall Statistics
+    enumerators_with_errors_count = len(enumerators_with_errors)
+    analysis['overall_stats'] = {
+        'Total Enumerators': len(VALID_ENUMERATORS),
+        'Enumerators with Errors': enumerators_with_errors_count,
+        'Enumerators without Errors': len(analysis['enumerators_without_errors']),
+        'Average Errors per Enumerator': round(analysis['error_type_overview']['Total Errors'] / enumerators_with_errors_count, 2) if enumerators_with_errors_count > 0 else 0,
+        'Unique Variables with Errors': combined_errors['variable'].nunique(),
+        'Strange Values Detected': len(strange_values)
+    }
+    
+    return analysis
+
 # ============================================================================
 # VALIDATION FUNCTIONS
 # ============================================================================
@@ -856,6 +1030,188 @@ def render_admin_dashboard(constraints_df: pd.DataFrame, logic_df: pd.DataFrame)
     
     st.markdown("---")
     
+    # ========== COMPREHENSIVE SUMMARY SECTION ==========
+    st.header("📈 High Frequency Check Summary")
+    
+    with st.spinner("Generating comprehensive analysis..."):
+        analysis = get_comprehensive_error_analysis(constraints_df, logic_df)
+    
+    # Overall Error Type Overview
+    st.subheader("🎯 Error Type Overview")
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        render_metric_card(
+            "Total Errors", 
+            str(analysis['error_type_overview']['Total Errors']), 
+            "⚠️"
+        )
+    with col2:
+        render_metric_card(
+            "Constraint Errors", 
+            str(analysis['error_type_overview']['Total Constraint Errors']), 
+            "🔒"
+        )
+    with col3:
+        render_metric_card(
+            "Logic Errors", 
+            str(analysis['error_type_overview']['Total Logic Errors']), 
+            "📊"
+        )
+    with col4:
+        render_metric_card(
+            "Farmers Affected", 
+            str(analysis['error_type_overview']['Unique Farmers Affected']), 
+            "👨‍🌾"
+        )
+    
+    st.markdown("---")
+    
+    # Error Rate by Enumerator
+    st.subheader("👥 Error Rate by Enumerator")
+    
+    if not analysis['error_rate_by_enumerator'].empty:
+        # Display as interactive table
+        st.dataframe(
+            analysis['error_rate_by_enumerator'],
+            use_container_width=True,
+            height=400
+        )
+        
+        # Visualization
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("**Error Distribution**")
+            fig_data = analysis['error_rate_by_enumerator'].nlargest(10, 'Total Errors')
+            st.bar_chart(fig_data.set_index('Username')[['Constraint Errors', 'Logic Errors']])
+        
+        with col2:
+            st.markdown("**Completion Rate**")
+            st.bar_chart(analysis['error_rate_by_enumerator'].set_index('Username')['Completion Rate (%)'])
+    
+    st.markdown("---")
+    
+    # Enumerators Without Errors
+    st.subheader("✅ Enumerators Without Errors")
+    
+    if analysis['enumerators_without_errors']:
+        st.success(f"**{len(analysis['enumerators_without_errors'])} enumerators** have no errors:")
+        cols = st.columns(4)
+        for idx, enum in enumerate(analysis['enumerators_without_errors']):
+            with cols[idx % 4]:
+                st.write(f"✅ {enum}")
+    else:
+        st.info("All enumerators have at least one error to correct")
+    
+    st.markdown("---")
+    
+    # Most Common Variable Errors
+    st.subheader("🔍 Most Frequent Variable Errors")
+    
+    tab1, tab2, tab3 = st.tabs(["📊 Overall", "🔒 Constraints", "📈 Logic"])
+    
+    with tab1:
+        if not analysis['most_common_variables']['overall_top_variables'].empty:
+            st.markdown("**Top 15 Variables with Most Errors**")
+            top_vars = analysis['most_common_variables']['overall_top_variables']
+            st.dataframe(
+                top_vars.rename(columns={'count': 'Error Count', 'error_category': 'Type'}),
+                use_container_width=True
+            )
+            st.bar_chart(top_vars.head(10).set_index('variable')['count'])
+    
+    with tab2:
+        if not analysis['most_common_variables']['top_constraint_variables'].empty:
+            st.markdown("**Top 10 Constraint Variables**")
+            st.dataframe(
+                analysis['most_common_variables']['top_constraint_variables'].rename(columns={'count': 'Error Count'}),
+                use_container_width=True
+            )
+    
+    with tab3:
+        if not analysis['most_common_variables']['top_logic_variables'].empty:
+            st.markdown("**Top 10 Logic Variables**")
+            st.dataframe(
+                analysis['most_common_variables']['top_logic_variables'].rename(columns={'count': 'Error Count'}),
+                use_container_width=True
+            )
+    
+    st.markdown("---")
+    
+    # Strange/Outlier Values
+    st.subheader("🚨 Strange & Outlier Values Detected")
+    
+    if not analysis['strange_values'].empty:
+        st.warning(f"**{len(analysis['strange_values'])} suspicious values** detected that need attention:")
+        
+        # Filter options
+        strange_type_filter = st.multiselect(
+            "Filter by type:",
+            options=analysis['strange_values']['Type'].unique(),
+            default=list(analysis['strange_values']['Type'].unique())
+        )
+        
+        filtered_strange = analysis['strange_values'][
+            analysis['strange_values']['Type'].isin(strange_type_filter)
+        ]
+        
+        st.dataframe(
+            filtered_strange,
+            use_container_width=True,
+            height=300
+        )
+        
+        # Download strange values
+        csv_strange = filtered_strange.to_csv(index=False)
+        st.download_button(
+            label="📥 Download Strange Values Report",
+            data=csv_strange,
+            file_name=f"strange_values_{datetime.now().strftime('%Y%m%d')}.csv",
+            mime='text/csv'
+        )
+    else:
+        st.success("✅ No suspicious outlier values detected")
+    
+    st.markdown("---")
+    
+    # Overall Statistics Summary
+    st.subheader("📊 Overall Statistics")
+    
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        st.metric(
+            "Enumerators with Errors",
+            analysis['overall_stats']['Enumerators with Errors'],
+            delta=f"{analysis['overall_stats']['Enumerators without Errors']} clean"
+        )
+    
+    with col2:
+        st.metric(
+            "Avg Errors/Enumerator",
+            analysis['overall_stats']['Average Errors per Enumerator']
+        )
+    
+    with col3:
+        st.metric(
+            "Unique Variables",
+            analysis['overall_stats']['Unique Variables with Errors']
+        )
+    
+    with col4:
+        st.metric(
+            "Strange Values",
+            analysis['overall_stats']['Strange Values Detected'],
+            delta="Need review" if analysis['overall_stats']['Strange Values Detected'] > 0 else "All good",
+            delta_color="inverse"
+        )
+    
+    st.markdown("---")
+    st.markdown("---")
+    
+    # ========== EXISTING SECTIONS BELOW ==========
+    
     # Get statistics
     stats_df = get_enumerator_statistics(constraints_df, logic_df)
     
@@ -866,20 +1222,6 @@ def render_admin_dashboard(constraints_df: pd.DataFrame, logic_df: pd.DataFrame)
     total_solved = stats_df['Solved'].sum()
     total_remaining = stats_df['Remaining'].sum()
     overall_progress = (total_solved / total_errors * 100) if total_errors > 0 else 0
-    
-    # Top metrics
-    col1, col2, col3, col4 = st.columns(4)
-    
-    with col1:
-        render_metric_card("Total Enumerators", str(active_enumerators), "👥")
-    with col2:
-        render_metric_card("Total Errors", str(total_errors), "⚠️")
-    with col3:
-        render_metric_card("Solved", str(total_solved), "✅")
-    with col4:
-        render_metric_card("Remaining", str(total_remaining), "📋")
-    
-    st.markdown("---")
     
     # Overall progress
     st.subheader("📈 Overall Progress")
