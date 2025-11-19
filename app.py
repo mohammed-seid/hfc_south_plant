@@ -12,11 +12,11 @@ from typing import Tuple, Optional, List, Dict
 # ============================================================================
 
 st.set_page_config(
-    page_title="HFC Data Correction",
+    page_title="ET South HFC Data Correction",
     layout="wide",
     initial_sidebar_state="collapsed",
     menu_items={
-        'About': "HFC Data Correction System v2.0"
+        'About': "ET South HFC Data Correction System v2.0"
     }
 )
 
@@ -25,7 +25,16 @@ GITHUB_OWNER = "mohammed-seid"
 GITHUB_REPO = "hfc-data-private"
 ADMIN_USERNAME = "admin"
 ADMIN_PASSWORD = "admin123"
+ENUMERATOR_PASSWORD = "1234"
 CACHE_TTL = 3600  # 1 hour
+
+# Valid enumerators list
+VALID_ENUMERATORS = [
+    "mesay", "melese.a", "degefu", "aster",
+    "firew", "mesfin", "aster.w", "asfaw.f", "abreham",
+    "asfaw.m", "ngatu", "demekech", "henok", "chere",
+    "getahun", "aynalem"
+]
 
 # ============================================================================
 # STYLING - Mobile-First Design
@@ -84,6 +93,22 @@ st.markdown("""
         box-shadow: 0 4px 6px rgba(0,0,0,0.1);
     }
     
+    .enumerator-stats {
+        background: #f8f9fa;
+        padding: 16px;
+        border-radius: 8px;
+        margin-bottom: 12px;
+        border-left: 4px solid #667eea;
+    }
+    
+    .login-box {
+        background: white;
+        padding: 30px;
+        border-radius: 12px;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        margin: 20px 0;
+    }
+    
     /* Better mobile spacing */
     @media (max-width: 768px) {
         .stTextInput, .stNumberInput, .stTextArea {
@@ -122,6 +147,7 @@ def initialize_session_state():
         'corrected_errors': set(),
         'all_corrections_data': {},
         'is_admin': False,
+        'is_authenticated': False,
         'selected_enumerator': None,
         'show_completed': False,
         'filter_error_type': 'All'
@@ -161,7 +187,9 @@ def fetch_file_from_github(filename: str) -> Optional[pd.DataFrame]:
             return None
         
         content = base64.b64decode(response.json()['content']).decode('utf-8')
-        return pd.read_csv(io.StringIO(content))
+        df = pd.read_csv(io.StringIO(content))
+        
+        return df
         
     except requests.exceptions.Timeout:
         st.error(f"⏱️ Timeout loading {filename}. Please check your connection.")
@@ -173,8 +201,8 @@ def fetch_file_from_github(filename: str) -> Optional[pd.DataFrame]:
 @st.cache_data(ttl=CACHE_TTL)
 def load_data_from_github() -> Tuple[Optional[pd.DataFrame], Optional[pd.DataFrame]]:
     """Load constraints and logic data from GitHub with caching"""
-    constraints_df = fetch_file_from_github("constraints.csv")
-    logic_df = fetch_file_from_github("logic.csv")
+    constraints_df = fetch_file_from_github("constraints_south.csv")
+    logic_df = fetch_file_from_github("logic_south.csv")
     
     if constraints_df is not None and logic_df is not None:
         st.success("✅ Data loaded from secure repository")
@@ -185,7 +213,7 @@ def load_existing_corrections() -> Optional[pd.DataFrame]:
     """Load existing corrections from GitHub"""
     try:
         headers = get_github_headers()
-        corrections_url = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/contents/corrections.csv"
+        corrections_url = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/contents/corrections_south.csv"
         response = requests.get(corrections_url, headers=headers)
         
         if response.status_code == 200:
@@ -200,7 +228,7 @@ def save_corrections_to_github(corrections_df: pd.DataFrame) -> bool:
     """Save or append corrections to GitHub"""
     try:
         headers = get_github_headers()
-        corrections_url = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/contents/corrections.csv"
+        corrections_url = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/contents/corrections_south.csv"
         
         # Check if file exists and load existing data
         response = requests.get(corrections_url, headers=headers)
@@ -249,6 +277,43 @@ def check_token_validity() -> bool:
         return False
 
 # ============================================================================
+# HELPER FUNCTIONS
+# ============================================================================
+
+def get_unique_id_column(df: pd.DataFrame) -> Optional[str]:
+    """Find the unique ID column name in the dataframe"""
+    if df is None or len(df) == 0:
+        return None
+    
+    # Common variations of unique_id column
+    possible_names = [
+        'unique_id', 'Unique_id', 'UNIQUE_ID', 'UniqueID', 'unique_ID',
+        'id', 'ID', 'farmer_id', 'Farmer_ID', 'farmerid'
+    ]
+    
+    for col_name in possible_names:
+        if col_name in df.columns:
+            return col_name
+    
+    # If not found, return the first column that might be an ID
+    for col in df.columns:
+        if 'id' in col.lower():
+            return col
+    
+    return None
+
+def safe_get_unique_ids(df: pd.DataFrame) -> set:
+    """Safely get unique IDs from dataframe"""
+    if df is None or len(df) == 0:
+        return set()
+    
+    id_col = get_unique_id_column(df)
+    if id_col is None:
+        return set()
+    
+    return set(df[id_col].unique())
+
+# ============================================================================
 # DATA PROCESSING FUNCTIONS
 # ============================================================================
 
@@ -290,14 +355,31 @@ def get_corrected_error_keys(enumerator: str) -> set:
     # Create error keys
     corrected_keys = set()
     for _, row in enumerator_corrections.iterrows():
-        error_key = f"{row['error_type']}_{row['unique_id']}_{row['variable']}"
-        corrected_keys.add(error_key)
+        # Try to get unique_id, handle if column name is different
+        unique_id = None
+        if 'unique_id' in row:
+            unique_id = row['unique_id']
+        else:
+            # Try other possible column names
+            for col in row.index:
+                if 'id' in col.lower() and col != 'error_type':
+                    unique_id = row[col]
+                    break
+        
+        if unique_id:
+            error_key = f"{row['error_type']}_{unique_id}_{row['variable']}"
+            corrected_keys.add(error_key)
     
     return corrected_keys
 
 def filter_uncorrected_errors(df: pd.DataFrame, error_type: str, enumerator: str) -> pd.DataFrame:
     """Remove already corrected errors from dataframe"""
     if df is None or len(df) == 0:
+        return pd.DataFrame()
+    
+    # Get the unique ID column
+    id_col = get_unique_id_column(df)
+    if id_col is None:
         return pd.DataFrame()
     
     # Get corrected errors from GitHub
@@ -307,9 +389,54 @@ def filter_uncorrected_errors(df: pd.DataFrame, error_type: str, enumerator: str
     all_corrected = corrected_keys.union(st.session_state.corrected_errors)
     
     return df[~df.apply(
-        lambda x: f"{error_type}_{x['unique_id']}_{x['variable']}" in all_corrected,
+        lambda x: f"{error_type}_{x[id_col]}_{x['variable']}" in all_corrected,
         axis=1
     )]
+
+def get_enumerator_statistics(constraints_df: pd.DataFrame, logic_df: pd.DataFrame) -> pd.DataFrame:
+    """Get detailed statistics for each enumerator"""
+    stats = []
+    
+    # Get all corrections
+    existing_corrections = load_existing_corrections()
+    
+    for enumerator in VALID_ENUMERATORS:
+        # Count total errors
+        constraint_errors = 0
+        logic_errors = 0
+        
+        if constraints_df is not None and len(constraints_df) > 0:
+            constraint_errors = len(constraints_df[constraints_df['username'] == enumerator])
+        
+        if logic_df is not None and len(logic_df) > 0:
+            logic_errors = len(logic_df[logic_df['username'] == enumerator])
+        
+        total_errors = constraint_errors + logic_errors
+        
+        # Count solved errors
+        solved = 0
+        if existing_corrections is not None:
+            solved = len(existing_corrections[existing_corrections['corrected_by'] == enumerator])
+        
+        # Calculate remaining
+        remaining = total_errors - solved
+        
+        # Calculate percentage
+        percentage = (solved / total_errors * 100) if total_errors > 0 else 0
+        
+        stats.append({
+            'Username': enumerator,
+            'Total Errors': total_errors,
+            'Solved': solved,
+            'Remaining': remaining,
+            'Progress (%)': round(percentage, 1)
+        })
+    
+    stats_df = pd.DataFrame(stats)
+    # Sort by remaining errors (descending)
+    stats_df = stats_df.sort_values('Remaining', ascending=False)
+    
+    return stats_df
 
 # ============================================================================
 # VALIDATION FUNCTIONS
@@ -353,10 +480,13 @@ def validate_corrections() -> Tuple[bool, List[str], int, int]:
 
 def validate_farmer_corrections(farmer_id: str) -> Tuple[bool, List[str], int, int]:
     """Validate corrections for a specific farmer"""
-    farmer_corrections = {
-        k: v for k, v in st.session_state.all_corrections_data.items()
-        if v['error_data']['unique_id'] == farmer_id
-    }
+    farmer_corrections = {}
+    
+    for k, v in st.session_state.all_corrections_data.items():
+        id_col = v.get('id_column', 'unique_id')
+        farmer_id_val = v['error_data'].get(id_col)
+        if str(farmer_id_val) == str(farmer_id):
+            farmer_corrections[k] = v
     
     total_errors = len(farmer_corrections)
     completed = 0
@@ -440,7 +570,7 @@ def render_farmer_header(farmer_name: str, phone_no: str, error_count: int, comp
         </div>
     """, unsafe_allow_html=True)
 
-def render_constraint_error(error: pd.Series, error_key: str):
+def render_constraint_error(error: pd.Series, error_key: str, id_col: str):
     """Render constraint error correction form"""
     st.markdown(f"### 🔒 {error['variable']}")
     
@@ -489,7 +619,8 @@ def render_constraint_error(error: pd.Series, error_key: str):
         'error_data': error,
         'correct_value': correct_value,
         'explanation': explanation,
-        'outside_range': correct_value < min_val or correct_value > max_val
+        'outside_range': correct_value < min_val or correct_value > max_val,
+        'id_column': id_col
     }
     
     # Visual validation feedback
@@ -505,7 +636,7 @@ def render_constraint_error(error: pd.Series, error_key: str):
     else:
         st.error("❌ Explanation required before saving")
 
-def render_logic_error(discrepancy: pd.Series, error_key: str):
+def render_logic_error(discrepancy: pd.Series, error_key: str, id_col: str):
     """Render logic error correction form"""
     st.markdown(f"### 📊 {discrepancy['variable']}")
     
@@ -554,7 +685,8 @@ def render_logic_error(discrepancy: pd.Series, error_key: str):
         'error_data': discrepancy,
         'correct_value': correct_value,
         'explanation': explanation,
-        'differs_from_both': correct_value != farmer_value and correct_value != troster_value
+        'differs_from_both': correct_value != farmer_value and correct_value != troster_value,
+        'id_column': id_col
     }
     
     # Visual validation feedback
@@ -570,10 +702,11 @@ def render_logic_error(discrepancy: pd.Series, error_key: str):
 def save_farmer_corrections(farmer_id: str, selected_enumerator: str) -> bool:
     """Save corrections for a specific farmer"""
     # Get corrections for this farmer
-    farmer_corrections = {
-        k: v for k, v in st.session_state.all_corrections_data.items()
-        if v['error_data']['unique_id'] == farmer_id
-    }
+    farmer_corrections = {}
+    for k, v in st.session_state.all_corrections_data.items():
+        id_col = v.get('id_column', 'unique_id')
+        if str(v['error_data'].get(id_col)) == str(farmer_id):
+            farmer_corrections[k] = v
     
     if not farmer_corrections:
         return False
@@ -583,19 +716,20 @@ def save_farmer_corrections(farmer_id: str, selected_enumerator: str) -> bool:
     
     for error_key, correction_data in farmer_corrections.items():
         error_data = correction_data['error_data']
+        id_col = correction_data.get('id_column', 'unique_id')
         
         base_record = {
             'error_type': correction_data['error_type'],
-            'username': error_data['username'],
-            'supervisor': error_data['supervisor'],
-            'woreda': error_data['woreda'],
-            'kebele': error_data['kebele'],
-            'farmer_name': error_data['farmer_name'],
-            'phone_no': error_data['phone_no'],
-            'subdate': error_data['subdate'],
-            'unique_id': error_data['unique_id'],
-            'variable': error_data['variable'],
-            'original_value': error_data['value'],
+            'username': error_data.get('username', ''),
+            'supervisor': error_data.get('supervisor', ''),
+            'woreda': error_data.get('woreda', ''),
+            'kebele': error_data.get('kebele', ''),
+            'farmer_name': error_data.get('farmer_name', ''),
+            'phone_no': error_data.get('phone_no', ''),
+            'subdate': error_data.get('subdate', ''),
+            'unique_id': error_data.get(id_col, ''),
+            'variable': error_data.get('variable', ''),
+            'original_value': error_data.get('value', ''),
             'correct_value': correction_data['correct_value'],
             'explanation': correction_data['explanation'],
             'corrected_by': selected_enumerator,
@@ -606,9 +740,9 @@ def save_farmer_corrections(farmer_id: str, selected_enumerator: str) -> bool:
         }
         
         if correction_data['error_type'] == 'constraint':
-            base_record['reference_value'] = error_data['constraint']
+            base_record['reference_value'] = error_data.get('constraint', '')
         else:
-            base_record['reference_value'] = error_data['Troster Value']
+            base_record['reference_value'] = error_data.get('Troster Value', '')
         
         corrections.append(base_record)
     
@@ -627,53 +761,201 @@ def save_farmer_corrections(farmer_id: str, selected_enumerator: str) -> bool:
     return False
 
 # ============================================================================
+# AUTHENTICATION
+# ============================================================================
+
+def render_enumerator_login():
+    """Render enumerator login page"""
+    st.title("🔐 ET South HFC Login")
+    st.markdown("---")
+    
+    col1, col2 = st.columns(2)
+    
+    # Enumerator Login
+    with col1:
+        st.markdown('<div class="login-box">', unsafe_allow_html=True)
+        st.subheader("👤 Enumerator Login")
+        
+        with st.form("enumerator_login"):
+            username = st.selectbox(
+                "Select Username",
+                options=[""] + VALID_ENUMERATORS,
+                index=0
+            )
+            
+            password = st.text_input("Password", type="password", key="enum_pass")
+            
+            submit = st.form_submit_button("🚀 Login", use_container_width=True, type="primary")
+            
+            if submit:
+                if username and username in VALID_ENUMERATORS and password == ENUMERATOR_PASSWORD:
+                    st.session_state.is_authenticated = True
+                    st.session_state.selected_enumerator = username
+                    st.session_state.is_admin = False
+                    st.success(f"✅ Welcome, {username}!")
+                    st.rerun()
+                else:
+                    st.error("❌ Invalid credentials")
+        
+        st.info("**Password:** `1234`")
+        st.markdown('</div>', unsafe_allow_html=True)
+    
+    # Admin Login
+    with col2:
+        st.markdown('<div class="login-box">', unsafe_allow_html=True)
+        st.subheader("👑 Admin Login")
+        
+        with st.form("admin_login"):
+            admin_user = st.text_input("Username", key="admin_user")
+            admin_pass = st.text_input("Password", type="password", key="admin_pass")
+            
+            admin_submit = st.form_submit_button("🔑 Admin Login", use_container_width=True, type="secondary")
+            
+            if admin_submit:
+                if admin_user == ADMIN_USERNAME and admin_pass == ADMIN_PASSWORD:
+                    st.session_state.is_admin = True
+                    st.session_state.is_authenticated = True
+                    st.session_state.selected_enumerator = "admin"
+                    st.success("✅ Admin access granted!")
+                    st.rerun()
+                else:
+                    st.error("❌ Invalid admin credentials")
+        
+        st.markdown('</div>', unsafe_allow_html=True)
+    
+    st.markdown("---")
+    st.markdown("""
+        ### 📋 Instructions
+        
+        **For Enumerators:**
+        - Select your username from the dropdown
+        - Enter password: `1234`
+        - You will see errors assigned to you
+        
+        **For Administrators:**
+        - Use admin credentials to access the dashboard
+        - View progress across all enumerators
+        - Download reports and statistics
+    """)
+
+# ============================================================================
 # ADMIN DASHBOARD
 # ============================================================================
 
-def render_admin_dashboard():
-    """Render admin dashboard with analytics"""
-    st.title("📊 Admin Dashboard")
+def render_admin_dashboard(constraints_df: pd.DataFrame, logic_df: pd.DataFrame):
+    """Render admin dashboard with enhanced analytics"""
+    st.title("📊 ET South HFC - Admin Dashboard")
     
     # Logout button
-    if st.button("🚪 Logout", type="secondary"):
-        st.session_state.is_admin = False
-        st.rerun()
+    col1, col2 = st.columns([6, 1])
+    with col2:
+        if st.button("🚪 Logout", type="secondary", use_container_width=True):
+            st.session_state.is_admin = False
+            st.session_state.is_authenticated = False
+            st.rerun()
     
     st.markdown("---")
     
+    # Get statistics
+    stats_df = get_enumerator_statistics(constraints_df, logic_df)
+    
+    # Overall metrics
+    total_enumerators = len(VALID_ENUMERATORS)
+    active_enumerators = len(stats_df[stats_df['Total Errors'] > 0])
+    total_errors = stats_df['Total Errors'].sum()
+    total_solved = stats_df['Solved'].sum()
+    total_remaining = stats_df['Remaining'].sum()
+    overall_progress = (total_solved / total_errors * 100) if total_errors > 0 else 0
+    
+    # Top metrics
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        render_metric_card("Total Enumerators", str(active_enumerators), "👥")
+    with col2:
+        render_metric_card("Total Errors", str(total_errors), "⚠️")
+    with col3:
+        render_metric_card("Solved", str(total_solved), "✅")
+    with col4:
+        render_metric_card("Remaining", str(total_remaining), "📋")
+    
+    st.markdown("---")
+    
+    # Overall progress
+    st.subheader("📈 Overall Progress")
+    render_progress_bar(total_solved, total_errors)
+    
+    st.markdown("---")
+    
+    # Enumerator-wise statistics
+    st.subheader("👥 Enumerator Statistics")
+    
+    # Filter options
+    filter_col1, filter_col2 = st.columns(2)
+    
+    with filter_col1:
+        show_all = st.checkbox("Show all enumerators (including those with no errors)", value=False)
+    
+    with filter_col2:
+        sort_by = st.selectbox(
+            "Sort by",
+            options=["Remaining (High to Low)", "Progress (%)", "Username", "Total Errors"],
+            index=0
+        )
+    
+    # Apply filters
+    display_df = stats_df.copy()
+    if not show_all:
+        display_df = display_df[display_df['Total Errors'] > 0]
+    
+    # Apply sorting
+    if sort_by == "Remaining (High to Low)":
+        display_df = display_df.sort_values('Remaining', ascending=False)
+    elif sort_by == "Progress (%)":
+        display_df = display_df.sort_values('Progress (%)', ascending=False)
+    elif sort_by == "Username":
+        display_df = display_df.sort_values('Username')
+    elif sort_by == "Total Errors":
+        display_df = display_df.sort_values('Total Errors', ascending=False)
+    
+    # Display enumerator cards
+    for idx, row in display_df.iterrows():
+        with st.expander(f"👤 {row['Username']} - {row['Remaining']} remaining ({row['Progress (%)']}% complete)", expanded=False):
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                st.metric("Total Errors", row['Total Errors'])
+            with col2:
+                st.metric("Solved", row['Solved'], delta=row['Solved'])
+            with col3:
+                st.metric("Remaining", row['Remaining'], delta=-row['Remaining'], delta_color="inverse")
+            with col4:
+                st.metric("Progress", f"{row['Progress (%)']}%")
+            
+            # Progress bar for this enumerator
+            render_progress_bar(row['Solved'], row['Total Errors'])
+    
+    st.markdown("---")
+    
+    # Detailed corrections view
+    st.subheader("📋 All Corrections")
+    
     try:
         headers = get_github_headers()
-        corrections_url = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/contents/corrections.csv"
+        corrections_url = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/contents/corrections_south.csv"
         response = requests.get(corrections_url, headers=headers)
         
         if response.status_code == 200:
             corrections_content = base64.b64decode(response.json()['content']).decode('utf-8')
             all_corrections = pd.read_csv(io.StringIO(corrections_content))
             
-            # Analytics
-            col1, col2, col3, col4 = st.columns(4)
-            
-            with col1:
-                render_metric_card("Total Corrections", str(len(all_corrections)), "✅")
-            with col2:
-                render_metric_card("Enumerators", str(all_corrections['username'].nunique()), "👥")
-            with col3:
-                render_metric_card("Farmers", str(all_corrections['unique_id'].nunique()), "👨‍🌾")
-            with col4:
-                constraint_count = len(all_corrections[all_corrections['error_type'] == 'constraint'])
-                render_metric_card("Constraint Fixes", str(constraint_count), "🔒")
-            
-            st.markdown("---")
-            
             # Filters
-            st.subheader("📂 Filter & Export")
-            
             filter_col1, filter_col2, filter_col3 = st.columns(3)
             
             with filter_col1:
                 selected_enumerator = st.multiselect(
                     "Filter by Enumerator",
-                    options=sorted(all_corrections['username'].unique()),
+                    options=sorted(all_corrections['corrected_by'].unique()),
                     default=[]
                 )
             
@@ -685,22 +967,19 @@ def render_admin_dashboard():
                 )
             
             with filter_col3:
-                # Show corrections that might need review (if marked)
-                show_flagged = st.checkbox("Show flagged for review", value=False)
+                show_flagged = st.checkbox("Show flagged corrections only", value=False)
             
             # Apply filters
             filtered_df = all_corrections.copy()
             if selected_enumerator:
-                filtered_df = filtered_df[filtered_df['username'].isin(selected_enumerator)]
+                filtered_df = filtered_df[filtered_df['corrected_by'].isin(selected_enumerator)]
             if selected_error_type:
                 filtered_df = filtered_df[filtered_df['error_type'].isin(selected_error_type)]
-            
-            # Highlight corrections with very different values
             if 'outside_range' in filtered_df.columns and show_flagged:
                 filtered_df = filtered_df[filtered_df['outside_range'] == True]
             
             # Display data
-            st.subheader(f"📋 Corrections ({len(filtered_df)} records)")
+            st.markdown(f"**Showing {len(filtered_df)} of {len(all_corrections)} corrections**")
             
             st.dataframe(
                 filtered_df.sort_values('correction_timestamp', ascending=False),
@@ -708,16 +987,17 @@ def render_admin_dashboard():
                 height=400
             )
             
-            # Show statistics about out-of-range corrections
+            # Statistics about flagged items
             if 'outside_range' in all_corrections.columns:
-                out_of_range_count = all_corrections['outside_range'].sum() if 'outside_range' in all_corrections.columns else 0
+                out_of_range_count = all_corrections['outside_range'].sum()
                 if out_of_range_count > 0:
-                    st.warning(f"⚠️ {out_of_range_count} corrections have values outside expected constraints (requires supervisor review)")
+                    st.warning(f"⚠️ {out_of_range_count} corrections have values outside expected constraints")
             
             # Download options
+            st.markdown("---")
             st.subheader("💾 Download Data")
             
-            col1, col2 = st.columns(2)
+            col1, col2, col3 = st.columns(3)
             
             with col1:
                 csv = filtered_df.to_csv(index=False)
@@ -732,9 +1012,19 @@ def render_admin_dashboard():
             with col2:
                 csv_all = all_corrections.to_csv(index=False)
                 st.download_button(
-                    label="📥 Download All Data",
+                    label="📥 Download All Corrections",
                     data=csv_all,
                     file_name=f"corrections_all_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+                    mime='text/csv',
+                    use_container_width=True
+                )
+            
+            with col3:
+                stats_csv = stats_df.to_csv(index=False)
+                st.download_button(
+                    label="📥 Download Statistics",
+                    data=stats_csv,
+                    file_name=f"enumerator_stats_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
                     mime='text/csv',
                     use_container_width=True
                 )
@@ -743,7 +1033,7 @@ def render_admin_dashboard():
             st.info("📭 No corrections submitted yet.")
             
     except Exception as e:
-        st.error(f"Error loading admin data: {str(e)}")
+        st.error(f"Error loading corrections data: {str(e)}")
 
 # ============================================================================
 # ENUMERATOR INTERFACE
@@ -752,272 +1042,262 @@ def render_admin_dashboard():
 def render_enumerator_interface(constraints_df: pd.DataFrame, logic_df: pd.DataFrame):
     """Render main enumerator correction interface"""
     
-    st.title("🌱 HFC Data Correction")
-    st.markdown("### Correct data errors for farmers")
+    selected_enumerator = st.session_state.selected_enumerator
     
-    # Enumerator selection
+    st.title("🌱 ET South HFC Data Correction")
+    st.markdown(f"### Welcome, **{selected_enumerator}**")
+    
+    # Logout button
+    col1, col2 = st.columns([6, 1])
+    with col2:
+        if st.button("🚪 Logout", type="secondary", use_container_width=True):
+            st.session_state.is_authenticated = False
+            st.session_state.selected_enumerator = None
+            st.rerun()
+    
     st.markdown("---")
-    st.subheader("👤 Select Your Account")
     
-    all_enumerators = sorted(
-        set(constraints_df['username'].unique()) | set(logic_df['username'].unique())
-    )
+    # Get ID columns
+    constraint_id_col = get_unique_id_column(constraints_df)
+    logic_id_col = get_unique_id_column(logic_df)
     
-    selected_enumerator = st.selectbox(
-        "Your username:",
-        options=all_enumerators,
-        index=0 if not st.session_state.selected_enumerator else all_enumerators.index(st.session_state.selected_enumerator),
-        key="enumerator_select"
-    )
+    if constraint_id_col is None and logic_id_col is None:
+        st.error("❌ Cannot find unique ID column in data. Please check your CSV files.")
+        st.info("Available columns in constraints: " + str(list(constraints_df.columns) if constraints_df is not None else "N/A"))
+        st.info("Available columns in logic: " + str(list(logic_df.columns) if logic_df is not None else "N/A"))
+        return
     
-    st.session_state.selected_enumerator = selected_enumerator
+    # Use the first valid ID column found
+    id_col = constraint_id_col if constraint_id_col else logic_id_col
     
     # Filter data - now checks both session state and GitHub
     enumerator_constraints = filter_uncorrected_errors(
-        constraints_df[constraints_df['username'] == selected_enumerator],
+        constraints_df[constraints_df['username'] == selected_enumerator] if constraints_df is not None else pd.DataFrame(),
         'constraint',
         selected_enumerator
     )
     
     enumerator_logic = filter_uncorrected_errors(
-        logic_df[logic_df['username'] == selected_enumerator],
+        logic_df[logic_df['username'] == selected_enumerator] if logic_df is not None else pd.DataFrame(),
         'logic',
         selected_enumerator
     )
     
     # Get unique farmers with errors
     all_farmers_with_errors = sorted(
-        set(enumerator_constraints['unique_id'].unique()) | 
-        set(enumerator_logic['unique_id'].unique())
+        safe_get_unique_ids(enumerator_constraints) | 
+        safe_get_unique_ids(enumerator_logic)
     )
-    
-    st.markdown("---")
     
     # Summary metrics
     if len(all_farmers_with_errors) == 0:
         st.success("🎉 All errors corrected! No pending issues.")
         st.balloons()
-    else:
-        total_errors = len(enumerator_constraints) + len(enumerator_logic)
-        
-        # Count already saved corrections
-        existing_corrections = load_existing_corrections()
-        saved_count = 0
-        if existing_corrections is not None:
-            saved_count = len(existing_corrections[existing_corrections['corrected_by'] == selected_enumerator])
-        
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            render_metric_card("Farmers Pending", str(len(all_farmers_with_errors)), "👨‍🌾")
-        with col2:
-            render_metric_card("Issues Remaining", str(total_errors), "⚠️")
-        with col3:
-            render_metric_card("Already Saved", str(saved_count), "✅")
-        
-        st.markdown("---")
-        
-        # Error type filter
-        error_filter = st.radio(
-            "Filter by error type:",
-            options=["All", "Constraints Only", "Logic Only"],
-            horizontal=True
-        )
-        
-        st.markdown("---")
-        
-        # Process each farmer
-        st.subheader("📞 Call Farmers & Correct Errors")
-        st.caption("Complete corrections for each farmer and save individually, or save all at once")
-        
-        for farmer_id in all_farmers_with_errors:
-            farmer_constraint_errors = enumerator_constraints[
-                enumerator_constraints['unique_id'] == farmer_id
-            ]
-            farmer_logic_errors = enumerator_logic[
-                enumerator_logic['unique_id'] == farmer_id
-            ]
-            
-            # Apply filter
-            if error_filter == "Constraints Only" and len(farmer_constraint_errors) == 0:
-                continue
-            if error_filter == "Logic Only" and len(farmer_logic_errors) == 0:
-                continue
-            
-            total_farmer_errors = len(farmer_constraint_errors) + len(farmer_logic_errors)
-            
-            if total_farmer_errors > 0:
-                # Get farmer info
-                farmer_name = ""
-                phone_no = ""
-                
-                if len(farmer_constraint_errors) > 0:
-                    farmer_name = farmer_constraint_errors.iloc[0]['farmer_name']
-                    phone_no = farmer_constraint_errors.iloc[0]['phone_no']
-                elif len(farmer_logic_errors) > 0:
-                    farmer_name = farmer_logic_errors.iloc[0]['farmer_name']
-                    phone_no = farmer_logic_errors.iloc[0]['phone_no']
-                
-                # Check how many corrections are ready for this farmer
-                is_farmer_valid, farmer_missing, farmer_completed, farmer_total = validate_farmer_corrections(farmer_id)
-                
-                # Render farmer section
-                with st.expander(f"👨‍🌾 {farmer_name} 📞 {phone_no}", expanded=False):
-                    render_farmer_header(farmer_name, phone_no, total_farmer_errors, farmer_completed)
-                    
-                    st.markdown("---")
-                    
-                    # Process constraint errors
-                    if len(farmer_constraint_errors) > 0:
-                        st.markdown("#### 🔒 Constraint Errors")
-                        for idx, error in farmer_constraint_errors.iterrows():
-                            error_key = f"constraint_{error['unique_id']}_{error['variable']}"
-                            render_constraint_error(error, error_key)
-                            st.markdown("---")
-                    
-                    # Process logic errors
-                    if len(farmer_logic_errors) > 0:
-                        st.markdown("#### 📊 Logic Discrepancies")
-                        for idx, discrepancy in farmer_logic_errors.iterrows():
-                            error_key = f"logic_{discrepancy['unique_id']}_{discrepancy['variable']}"
-                            render_logic_error(discrepancy, error_key)
-                            st.markdown("---")
-                    
-                    # Individual farmer save button
-                    st.markdown("---")
-                    
-                    if is_farmer_valid:
-                        if st.button(f"💾 Save Corrections for {farmer_name}", key=f"save_{farmer_id}", type="primary", use_container_width=True):
-                            with st.spinner("Saving..."):
-                                if save_farmer_corrections(farmer_id, selected_enumerator):
-                                    st.success(f"✅ Saved {farmer_completed} corrections for {farmer_name}!")
-                                    st.balloons()
-                                    # Clear cache to reload data
-                                    load_data_from_github.clear()
-                                    st.rerun()
-                                else:
-                                    st.error("Failed to save. Please try again.")
-                    else:
-                        st.warning(f"⚠️ Complete all corrections for this farmer to save ({farmer_completed}/{farmer_total} ready)")
-                        with st.expander("Missing items"):
-                            for item in farmer_missing:
-                                st.write(f"• {item}")
-        
-        # Save all section
-        st.markdown("---")
-        st.header("💾 Save All Remaining Corrections")
-        
-        # Show overall progress
-        is_valid, missing_list, completed, total = validate_corrections()
-        render_progress_bar(completed, total)
-        
-        if not is_valid:
-            st.warning(f"⚠️ Some corrections are incomplete ({len(missing_list)} items)")
-            with st.expander("See incomplete items"):
-                for item in missing_list:
-                    st.write(f"• {item}")
-        
-        # Save all button
-        save_button_type = "primary" if is_valid else "secondary"
-        
-        if st.button("✅ Save All Completed Corrections", type=save_button_type, use_container_width=True, disabled=(completed == 0)):
-            if completed == 0:
-                st.error("No completed corrections to save")
-                st.stop()
-            
-            # Prepare only completed corrections
-            corrections = []
-            keys_to_remove = []
-            
-            for error_key, correction_data in st.session_state.all_corrections_data.items():
-                explanation = correction_data.get('explanation', '').strip()
-                
-                # Skip if no explanation
-                if not explanation:
-                    continue
-                
-                # Skip if out of range without detailed explanation
-                if correction_data.get('outside_range', False) and len(explanation) < 20:
-                    continue
-                
-                # Skip if differs from both without good explanation
-                if correction_data.get('differs_from_both', False) and len(explanation) < 15:
-                    continue
-                
-                # This correction is valid, include it
-                error_data = correction_data['error_data']
-                
-                base_record = {
-                    'error_type': correction_data['error_type'],
-                    'username': error_data['username'],
-                    'supervisor': error_data['supervisor'],
-                    'woreda': error_data['woreda'],
-                    'kebele': error_data['kebele'],
-                    'farmer_name': error_data['farmer_name'],
-                    'phone_no': error_data['phone_no'],
-                    'subdate': error_data['subdate'],
-                    'unique_id': error_data['unique_id'],
-                    'variable': error_data['variable'],
-                    'original_value': error_data['value'],
-                    'correct_value': correction_data['correct_value'],
-                    'explanation': correction_data['explanation'],
-                    'corrected_by': selected_enumerator,
-                    'correction_date': datetime.now().strftime("%d-%b-%y"),
-                    'correction_timestamp': datetime.now().isoformat(),
-                    'outside_range': correction_data.get('outside_range', False),
-                    'differs_from_both': correction_data.get('differs_from_both', False)
-                }
-                
-                if correction_data['error_type'] == 'constraint':
-                    base_record['reference_value'] = error_data['constraint']
-                else:
-                    base_record['reference_value'] = error_data['Troster Value']
-                
-                corrections.append(base_record)
-                keys_to_remove.append(error_key)
-            
-            if corrections:
-                corrections_df = pd.DataFrame(corrections)
-                
-                with st.spinner("Saving to secure repository..."):
-                    if save_corrections_to_github(corrections_df):
-                        st.success(f"✅ Successfully saved {len(corrections)} corrections!")
-                        st.info(f"📝 {total - completed} items still need attention and were not saved.")
-                        st.balloons()
-                        
-                        # Mark as corrected and remove from pending
-                        for error_key in keys_to_remove:
-                            st.session_state.corrected_errors.add(error_key)
-                            if error_key in st.session_state.all_corrections_data:
-                                del st.session_state.all_corrections_data[error_key]
-                        
-                        # Clear cache to reload data
-                        load_data_from_github.clear()
-                        st.rerun()
-                    else:
-                        st.error("❌ Failed to save. Please try again or contact support.")
-            else:
-                st.warning("No completed corrections to save.")
-
-# ============================================================================
-# ADMIN LOGIN
-# ============================================================================
-
-def render_admin_login():
-    """Render admin login in sidebar"""
-    st.sidebar.header("🔐 Admin Access")
+        return
     
-    with st.sidebar.form("admin_login"):
-        username = st.text_input("Username")
-        password = st.text_input("Password", type="password")
-        submit = st.form_submit_button("Login", use_container_width=True)
+    total_errors = len(enumerator_constraints) + len(enumerator_logic)
+    
+    # Count already saved corrections
+    existing_corrections = load_existing_corrections()
+    saved_count = 0
+    if existing_corrections is not None:
+        saved_count = len(existing_corrections[existing_corrections['corrected_by'] == selected_enumerator])
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        render_metric_card("Farmers Pending", str(len(all_farmers_with_errors)), "👨‍🌾")
+    with col2:
+        render_metric_card("Issues Remaining", str(total_errors), "⚠️")
+    with col3:
+        render_metric_card("Already Saved", str(saved_count), "✅")
+    
+    st.markdown("---")
+    
+    # Error type filter
+    error_filter = st.radio(
+        "Filter by error type:",
+        options=["All", "Constraints Only", "Logic Only"],
+        horizontal=True
+    )
+    
+    st.markdown("---")
+    
+    # Process each farmer
+    st.subheader("📞 Call Farmers & Correct Errors")
+    st.caption("Complete corrections for each farmer and save individually, or save all at once")
+    
+    for farmer_id in all_farmers_with_errors:
+        farmer_constraint_errors = enumerator_constraints[
+            enumerator_constraints[id_col] == farmer_id
+        ] if len(enumerator_constraints) > 0 else pd.DataFrame()
         
-        if submit:
-            if username == ADMIN_USERNAME and password == ADMIN_PASSWORD:
-                st.session_state.is_admin = True
-                st.rerun()
+        farmer_logic_errors = enumerator_logic[
+            enumerator_logic[id_col] == farmer_id
+        ] if len(enumerator_logic) > 0 else pd.DataFrame()
+        
+        # Apply filter
+        if error_filter == "Constraints Only" and len(farmer_constraint_errors) == 0:
+            continue
+        if error_filter == "Logic Only" and len(farmer_logic_errors) == 0:
+            continue
+        
+        total_farmer_errors = len(farmer_constraint_errors) + len(farmer_logic_errors)
+        
+        if total_farmer_errors > 0:
+            # Get farmer info
+            farmer_name = ""
+            phone_no = ""
+            
+            if len(farmer_constraint_errors) > 0:
+                farmer_name = farmer_constraint_errors.iloc[0].get('farmer_name', 'Unknown')
+                phone_no = farmer_constraint_errors.iloc[0].get('phone_no', 'N/A')
+            elif len(farmer_logic_errors) > 0:
+                farmer_name = farmer_logic_errors.iloc[0].get('farmer_name', 'Unknown')
+                phone_no = farmer_logic_errors.iloc[0].get('phone_no', 'N/A')
+            
+            # Check how many corrections are ready for this farmer
+            is_farmer_valid, farmer_missing, farmer_completed, farmer_total = validate_farmer_corrections(farmer_id)
+            
+            # Render farmer section
+            with st.expander(f"👨‍🌾 {farmer_name} 📞 {phone_no}", expanded=False):
+                render_farmer_header(farmer_name, phone_no, total_farmer_errors, farmer_completed)
+                
+                st.markdown("---")
+                
+                # Process constraint errors
+                if len(farmer_constraint_errors) > 0:
+                    st.markdown("#### 🔒 Constraint Errors")
+                    for idx, error in farmer_constraint_errors.iterrows():
+                        error_key = f"constraint_{error[id_col]}_{error['variable']}"
+                        render_constraint_error(error, error_key, id_col)
+                        st.markdown("---")
+                
+                # Process logic errors
+                if len(farmer_logic_errors) > 0:
+                    st.markdown("#### 📊 Logic Discrepancies")
+                    for idx, discrepancy in farmer_logic_errors.iterrows():
+                        error_key = f"logic_{discrepancy[id_col]}_{discrepancy['variable']}"
+                        render_logic_error(discrepancy, error_key, id_col)
+                        st.markdown("---")
+                
+                # Individual farmer save button
+                st.markdown("---")
+                
+                if is_farmer_valid:
+                    if st.button(f"💾 Save Corrections for {farmer_name}", key=f"save_{farmer_id}", type="primary", use_container_width=True):
+                        with st.spinner("Saving..."):
+                            if save_farmer_corrections(farmer_id, selected_enumerator):
+                                st.success(f"✅ Saved {farmer_completed} corrections for {farmer_name}!")
+                                st.balloons()
+                                # Clear cache to reload data
+                                load_data_from_github.clear()
+                                st.rerun()
+                            else:
+                                st.error("Failed to save. Please try again.")
+                else:
+                    st.warning(f"⚠️ Complete all corrections for this farmer to save ({farmer_completed}/{farmer_total} ready)")
+                    with st.expander("Missing items"):
+                        for item in farmer_missing:
+                            st.write(f"• {item}")
+    
+    # Save all section
+    st.markdown("---")
+    st.header("💾 Save All Remaining Corrections")
+    
+    # Show overall progress
+    is_valid, missing_list, completed, total = validate_corrections()
+    render_progress_bar(completed, total)
+    
+    if not is_valid:
+        st.warning(f"⚠️ Some corrections are incomplete ({len(missing_list)} items)")
+        with st.expander("See incomplete items"):
+            for item in missing_list:
+                st.write(f"• {item}")
+    
+    # Save all button
+    save_button_type = "primary" if is_valid else "secondary"
+    
+    if st.button("✅ Save All Completed Corrections", type=save_button_type, use_container_width=True, disabled=(completed == 0)):
+        if completed == 0:
+            st.error("No completed corrections to save")
+            st.stop()
+        
+        # Prepare only completed corrections
+        corrections = []
+        keys_to_remove = []
+        
+        for error_key, correction_data in st.session_state.all_corrections_data.items():
+            explanation = correction_data.get('explanation', '').strip()
+            
+            # Skip if no explanation
+            if not explanation:
+                continue
+            
+            # Skip if out of range without detailed explanation
+            if correction_data.get('outside_range', False) and len(explanation) < 20:
+                continue
+            
+            # Skip if differs from both without good explanation
+            if correction_data.get('differs_from_both', False) and len(explanation) < 15:
+                continue
+            
+            # This correction is valid, include it
+            error_data = correction_data['error_data']
+            id_col = correction_data.get('id_column', 'unique_id')
+            
+            base_record = {
+                'error_type': correction_data['error_type'],
+                'username': error_data.get('username', ''),
+                'supervisor': error_data.get('supervisor', ''),
+                'woreda': error_data.get('woreda', ''),
+                'kebele': error_data.get('kebele', ''),
+                'farmer_name': error_data.get('farmer_name', ''),
+                'phone_no': error_data.get('phone_no', ''),
+                'subdate': error_data.get('subdate', ''),
+                'unique_id': error_data.get(id_col, ''),
+                'variable': error_data.get('variable', ''),
+                'original_value': error_data.get('value', ''),
+                'correct_value': correction_data['correct_value'],
+                'explanation': correction_data['explanation'],
+                'corrected_by': selected_enumerator,
+                'correction_date': datetime.now().strftime("%d-%b-%y"),
+                'correction_timestamp': datetime.now().isoformat(),
+                'outside_range': correction_data.get('outside_range', False),
+                'differs_from_both': correction_data.get('differs_from_both', False)
+            }
+            
+            if correction_data['error_type'] == 'constraint':
+                base_record['reference_value'] = error_data.get('constraint', '')
             else:
-                st.error("Invalid credentials")
+                base_record['reference_value'] = error_data.get('Troster Value', '')
+            
+            corrections.append(base_record)
+            keys_to_remove.append(error_key)
+        
+        if corrections:
+            corrections_df = pd.DataFrame(corrections)
+            
+            with st.spinner("Saving to secure repository..."):
+                if save_corrections_to_github(corrections_df):
+                    st.success(f"✅ Successfully saved {len(corrections)} corrections!")
+                    if total - completed > 0:
+                        st.info(f"📝 {total - completed} items still need attention and were not saved.")
+                    st.balloons()
+                    
+                    # Mark as corrected and remove from pending
+                    for error_key in keys_to_remove:
+                        st.session_state.corrected_errors.add(error_key)
+                        if error_key in st.session_state.all_corrections_data:
+                            del st.session_state.all_corrections_data[error_key]
+                    
+                    # Clear cache to reload data
+                    load_data_from_github.clear()
+                    st.rerun()
+                else:
+                    st.error("❌ Failed to save. Please try again or contact support.")
+        else:
+            st.warning("No completed corrections to save.")
 
 # ============================================================================
 # MAIN APPLICATION
@@ -1025,6 +1305,11 @@ def render_admin_login():
 
 def main():
     """Main application entry point"""
+    
+    # Check if user is authenticated
+    if not st.session_state.is_authenticated:
+        render_enumerator_login()
+        return
     
     # Check token validity
     with st.spinner("Verifying access..."):
@@ -1048,15 +1333,14 @@ def main():
     
     # Route to appropriate interface
     if st.session_state.is_admin:
-        render_admin_dashboard()
+        render_admin_dashboard(constraints_df, logic_df)
     else:
-        render_admin_login()
         render_enumerator_interface(constraints_df, logic_df)
     
     # Footer
     st.markdown("---")
     st.markdown(
-        "<p style='text-align: center; color: #666;'>📱 HFC Correction System v2.0 | "
+        "<p style='text-align: center; color: #666;'>📱 ET South HFC Correction System v2.0 | "
         f"Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M')}</p>",
         unsafe_allow_html=True
     )
