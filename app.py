@@ -12,11 +12,11 @@ from typing import Tuple, Optional, List, Dict
 # ============================================================================
 
 st.set_page_config(
-    page_title="ET South HFC Data Correction",
+    page_title="ET Coffee HFC Data Correction",
     layout="wide",
     initial_sidebar_state="collapsed",
     menu_items={
-        'About': "ET South HFC Data Correction System v2.0"
+        'About': "ET Coffee HFC Data Correction System v2.0"
     }
 )
 
@@ -27,6 +27,11 @@ ADMIN_USERNAME = "admin"
 ADMIN_PASSWORD = "admin123"
 ENUMERATOR_PASSWORD = "1234"
 CACHE_TTL = 3600  # 1 hour
+
+# ========== FILE NAMES ==========
+CONSTRAINTS_FILE = "constraints_coffee.csv"
+LOGIC_FILE = "logic_coffee.csv"
+CORRECTIONS_FILE = "corrections_coffee.csv"
 
 # Valid enumerators list
 VALID_ENUMERATORS = [
@@ -201,8 +206,8 @@ def fetch_file_from_github(filename: str) -> Optional[pd.DataFrame]:
 @st.cache_data(ttl=CACHE_TTL)
 def load_data_from_github() -> Tuple[Optional[pd.DataFrame], Optional[pd.DataFrame]]:
     """Load constraints and logic data from GitHub with caching"""
-    constraints_df = fetch_file_from_github("constraints_south.csv")
-    logic_df = fetch_file_from_github("logic_south.csv")
+    constraints_df = fetch_file_from_github(CONSTRAINTS_FILE)
+    logic_df = fetch_file_from_github(LOGIC_FILE)
     
     if constraints_df is not None and logic_df is not None:
         st.success("✅ Data loaded from secure repository")
@@ -213,7 +218,7 @@ def load_existing_corrections() -> Optional[pd.DataFrame]:
     """Load existing corrections from GitHub"""
     try:
         headers = get_github_headers()
-        corrections_url = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/contents/corrections_south.csv"
+        corrections_url = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/contents/{CORRECTIONS_FILE}"
         response = requests.get(corrections_url, headers=headers)
         
         if response.status_code == 200:
@@ -228,7 +233,7 @@ def save_corrections_to_github(corrections_df: pd.DataFrame) -> bool:
     """Save or append corrections to GitHub"""
     try:
         headers = get_github_headers()
-        corrections_url = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/contents/corrections_south.csv"
+        corrections_url = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/contents/{CORRECTIONS_FILE}"
         
         # Check if file exists and load existing data
         response = requests.get(corrections_url, headers=headers)
@@ -248,7 +253,7 @@ def save_corrections_to_github(corrections_df: pd.DataFrame) -> bool:
         
         # Prepare payload
         payload = {
-            "message": f"Add corrections - {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+            "message": f"Add coffee corrections - {datetime.now().strftime('%Y-%m-%d %H:%M')}",
             "content": encoded_data,
             "branch": "main"
         }
@@ -299,6 +304,70 @@ def get_unique_id_column(df: pd.DataFrame) -> Optional[str]:
     for col in df.columns:
         if 'id' in col.lower():
             return col
+    
+    return None
+
+def get_farmer_name_column(df: pd.DataFrame) -> Optional[str]:
+    """Find the farmer name column in the dataframe"""
+    if df is None or len(df) == 0:
+        return None
+    
+    possible_names = [
+        'farmer_name', 'resp_name', 'respondent_name', 'name', 
+        'farmer', 'respondent', 'hh_name', 'hh_head_name'
+    ]
+    
+    for col_name in possible_names:
+        if col_name in df.columns:
+            return col_name
+    
+    return None
+
+def get_phone_column(df: pd.DataFrame) -> Optional[str]:
+    """Find the phone number column in the dataframe"""
+    if df is None or len(df) == 0:
+        return None
+    
+    possible_names = [
+        'phone_no', 'phone', 'telephone', 'mobile', 'contact',
+        'phone_number', 'tel', 'cell'
+    ]
+    
+    for col_name in possible_names:
+        if col_name in df.columns:
+            return col_name
+    
+    return None
+
+def get_date_column(df: pd.DataFrame) -> Optional[str]:
+    """Find the date column in the dataframe"""
+    if df is None or len(df) == 0:
+        return None
+    
+    possible_names = [
+        'subdate', 'startdate', 'date', 'submission_date', 
+        'interview_date', 'survey_date'
+    ]
+    
+    for col_name in possible_names:
+        if col_name in df.columns:
+            return col_name
+    
+    return None
+
+def get_reason_column(df: pd.DataFrame) -> Optional[str]:
+    """Find the reason/constraint column in the dataframe"""
+    if df is None or len(df) == 0:
+        return None
+    
+    possible_names = [
+        'reason', 'constraint', 'rule', 'validation', 
+        'error_message', 'message', 'description'
+    ]
+    
+    for col_name in possible_names:
+        if col_name in df.columns:
+            return col_name
     
     return None
 
@@ -525,77 +594,44 @@ def get_comprehensive_error_analysis(constraints_df: pd.DataFrame, logic_df: pd.
     # 5. Strange/Outlier Values Detection
     strange_values = []
     
-    # Analyze constraint errors for extreme values
-    if constraints_df is not None and len(constraints_df) > 0:
-        for _, row in constraints_df.iterrows():
-            try:
-                value = float(row['value'])
-                
-                # Check for suspiciously large values
-                if value > 100000:
-                    strange_values.append({
-                        'Type': 'Constraint - Extremely Large',
-                        'Variable': row['variable'],
-                        'Value': value,
-                        'Username': row.get('username', 'N/A'),
-                        'Farmer': row.get('farmer_name', 'N/A'),
-                        'Constraint': row.get('constraint', 'N/A')
-                    })
-                
-                # Check for negative values where they shouldn't be
-                if value < 0 and 'temp' not in row['variable'].lower():
-                    strange_values.append({
-                        'Type': 'Constraint - Negative Value',
-                        'Variable': row['variable'],
-                        'Value': value,
-                        'Username': row.get('username', 'N/A'),
-                        'Farmer': row.get('farmer_name', 'N/A'),
-                        'Constraint': row.get('constraint', 'N/A')
-                    })
-            except:
-                # Non-numeric value
+    # Analyze all errors for extreme values
+    for _, row in combined_errors.iterrows():
+        try:
+            value = float(row['value'])
+            error_cat = row['error_category']
+            
+            # Get farmer name column
+            farmer_name_col = get_farmer_name_column(combined_errors)
+            farmer_name = row.get(farmer_name_col, 'N/A') if farmer_name_col else 'N/A'
+            
+            # Get reason column
+            reason_col = get_reason_column(combined_errors)
+            reason = row.get(reason_col, row.get('constraint', 'N/A')) if reason_col else row.get('constraint', 'N/A')
+            
+            # Check for suspiciously large values
+            if value > 100000:
                 strange_values.append({
-                    'Type': 'Constraint - Non-Numeric',
+                    'Type': f'{error_cat} - Extremely Large',
                     'Variable': row['variable'],
-                    'Value': row['value'],
+                    'Value': value,
                     'Username': row.get('username', 'N/A'),
-                    'Farmer': row.get('farmer_name', 'N/A'),
-                    'Constraint': row.get('constraint', 'N/A')
+                    'Farmer': farmer_name,
+                    'Reason': reason
                 })
-    
-    # Analyze logic errors for large discrepancies
-    if logic_df is not None and len(logic_df) > 0:
-        for _, row in logic_df.iterrows():
-            try:
-                farmer_val = float(row['value'])
-                troster_val = float(row['Troster Value'])
-                difference = abs(farmer_val - troster_val)
-                
-                # Large absolute discrepancy
-                if difference > 1000:
-                    strange_values.append({
-                        'Type': 'Logic - Large Discrepancy',
-                        'Variable': row['variable'],
-                        'Value': f"Farmer: {farmer_val}, System: {troster_val}, Diff: {difference}",
-                        'Username': row.get('username', 'N/A'),
-                        'Farmer': row.get('farmer_name', 'N/A'),
-                        'Constraint': f"Difference: {difference}"
-                    })
-                
-                # Large percentage discrepancy (if both values are non-zero)
-                if farmer_val > 0 and troster_val > 0:
-                    percent_diff = abs((farmer_val - troster_val) / troster_val * 100)
-                    if percent_diff > 200:  # More than 200% difference
-                        strange_values.append({
-                            'Type': 'Logic - Large % Difference',
-                            'Variable': row['variable'],
-                            'Value': f"Farmer: {farmer_val}, System: {troster_val}, {percent_diff:.1f}% diff",
-                            'Username': row.get('username', 'N/A'),
-                            'Farmer': row.get('farmer_name', 'N/A'),
-                            'Constraint': f"{percent_diff:.1f}% difference"
-                        })
-            except:
-                pass
+            
+            # Check for negative values where they shouldn't be
+            if value < 0 and 'temp' not in row['variable'].lower():
+                strange_values.append({
+                    'Type': f'{error_cat} - Negative Value',
+                    'Variable': row['variable'],
+                    'Value': value,
+                    'Username': row.get('username', 'N/A'),
+                    'Farmer': farmer_name,
+                    'Reason': reason
+                })
+        except:
+            # Non-numeric value - might be intentional
+            pass
     
     analysis['strange_values'] = pd.DataFrame(strange_values) if strange_values else pd.DataFrame()
     
@@ -632,21 +668,13 @@ def validate_corrections() -> Tuple[bool, List[str], int, int]:
             missing.append(f"{error_type}: {var_name} - No explanation provided")
             continue
         
-        # For constraint errors outside range, require detailed explanation
-        if correction_data['error_type'] == 'constraint':
-            if correction_data.get('outside_range', False):
-                if len(explanation) < 20:
-                    var_name = correction_data['error_data']['variable']
-                    missing.append(f"Constraint: {var_name} - Out-of-range value needs detailed explanation (min 20 chars)")
-                    continue
-        
-        # For logic errors that differ from both values, encourage detailed explanation
-        if correction_data['error_type'] == 'logic':
-            if correction_data.get('differs_from_both', False):
-                if len(explanation) < 15:
-                    var_name = correction_data['error_data']['variable']
-                    missing.append(f"Logic: {var_name} - Value differs from both records, needs better explanation")
-                    continue
+        # For errors outside range, require detailed explanation
+        if correction_data.get('outside_range', False):
+            if len(explanation) < 20:
+                var_name = correction_data['error_data']['variable']
+                error_type = "Constraint" if correction_data['error_type'] == 'constraint' else "Logic"
+                missing.append(f"{error_type}: {var_name} - Out-of-range value needs detailed explanation (min 20 chars)")
+                continue
         
         completed += 1
     
@@ -676,21 +704,12 @@ def validate_farmer_corrections(farmer_id: str) -> Tuple[bool, List[str], int, i
             missing.append(f"{error_type}: {var_name}")
             continue
         
-        # For constraint errors outside range, require detailed explanation
-        if correction_data['error_type'] == 'constraint':
-            if correction_data.get('outside_range', False):
-                if len(explanation) < 20:
-                    var_name = correction_data['error_data']['variable']
-                    missing.append(f"Constraint: {var_name} - Needs detailed explanation")
-                    continue
-        
-        # For logic errors that differ from both values
-        if correction_data['error_type'] == 'logic':
-            if correction_data.get('differs_from_both', False):
-                if len(explanation) < 15:
-                    var_name = correction_data['error_data']['variable']
-                    missing.append(f"Logic: {var_name} - Needs better explanation")
-                    continue
+        # For errors outside range, require detailed explanation
+        if correction_data.get('outside_range', False):
+            if len(explanation) < 20:
+                var_name = correction_data['error_data']['variable']
+                missing.append(f"{var_name} - Needs detailed explanation")
+                continue
         
         completed += 1
     
@@ -730,13 +749,16 @@ def render_farmer_header(farmer_name: str, phone_no: str, error_count: int, comp
     else:
         badge = f'<span class="error-badge">{error_count} issues</span>'
     
+    # Handle missing phone
+    phone_display = phone_no if phone_no and str(phone_no) != '-99' and str(phone_no) != 'nan' else 'N/A'
+    
     st.markdown(f"""
         <div class="farmer-card">
             <div style="display: flex; justify-content: space-between; align-items: center;">
                 <div>
                     <div style="font-size: 18px; font-weight: 600;">👨‍🌾 {farmer_name}</div>
                     <div style="font-size: 14px; color: #666; margin-top: 4px;">
-                        📞 <a href="tel:{phone_no}" style="color: #667eea; text-decoration: none;">{phone_no}</a>
+                        📞 <a href="tel:{phone_display}" style="color: #667eea; text-decoration: none;">{phone_display}</a>
                     </div>
                 </div>
                 <div>{badge}</div>
@@ -748,12 +770,16 @@ def render_constraint_error(error: pd.Series, error_key: str, id_col: str):
     """Render constraint error correction form"""
     st.markdown(f"### 🔒 {error['variable']}")
     
+    # Get reason column
+    reason_col = get_reason_column(pd.DataFrame([error]))
+    constraint_text = error.get(reason_col, error.get('constraint', 'No constraint specified')) if reason_col else error.get('constraint', 'No constraint specified')
+    
     # Extract constraints for display purposes only
-    min_val, max_val = extract_constraint_limits(error['constraint'])
+    min_val, max_val = extract_constraint_limits(str(constraint_text))
     
     # Use original value as default, but don't restrict input
     try:
-        default_value = int(error['value'])
+        default_value = int(float(error['value']))
     except:
         default_value = 0
     
@@ -762,8 +788,9 @@ def render_constraint_error(error: pd.Series, error_key: str, id_col: str):
     
     with col1:
         st.info(f"**Current Value:** {error['value']}")
-        st.caption(f"**Rule:** {error['constraint']}")
-        st.caption(f"💡 Expected range: {min_val} - {max_val}")
+        st.caption(f"**Rule:** {constraint_text}")
+        if min_val != 0 or max_val != 100000:
+            st.caption(f"💡 Expected range: {min_val} - {max_val}")
     
     with col2:
         # NO RESTRICTIONS on corrected value - enumerator can input any value
@@ -776,15 +803,18 @@ def render_constraint_error(error: pd.Series, error_key: str, id_col: str):
         )
     
     # Show warning if value is outside expected range
-    if correct_value < min_val or correct_value > max_val:
-        st.warning(f"⚠️ Value is outside expected range ({min_val}-{max_val}). Please explain why in detail below.")
+    outside_range = False
+    if min_val != 0 or max_val != 100000:
+        if correct_value < min_val or correct_value > max_val:
+            st.warning(f"⚠️ Value is outside expected range ({min_val}-{max_val}). Please explain why in detail below.")
+            outside_range = True
     
     explanation = st.text_area(
         "📝 Explanation (Required)",
         placeholder="Why is this correction needed? What did the farmer say? If outside expected range, provide detailed justification.",
         key=f"explain_{error_key}",
         height=120,
-        help="Please provide a clear explanation for the correction, especially if the value is outside the expected range"
+        help="Please provide a clear explanation for the correction"
     )
     
     # Store correction data
@@ -793,62 +823,65 @@ def render_constraint_error(error: pd.Series, error_key: str, id_col: str):
         'error_data': error,
         'correct_value': correct_value,
         'explanation': explanation,
-        'outside_range': correct_value < min_val or correct_value > max_val,
+        'outside_range': outside_range,
         'id_column': id_col
     }
     
     # Visual validation feedback
     if explanation and explanation.strip():
-        # Check if explanation is substantial for out-of-range values
-        if correct_value < min_val or correct_value > max_val:
-            if len(explanation.strip()) < 20:
-                st.warning("⚠️ Out-of-range value requires detailed explanation (at least 20 characters)")
-            else:
-                st.success("✅ Explanation provided")
+        if outside_range and len(explanation.strip()) < 20:
+            st.warning("⚠️ Out-of-range value requires detailed explanation (at least 20 characters)")
         else:
             st.success("✅ Explanation provided")
     else:
         st.error("❌ Explanation required before saving")
 
-def render_logic_error(discrepancy: pd.Series, error_key: str, id_col: str):
-    """Render logic error correction form"""
-    st.markdown(f"### 📊 {discrepancy['variable']}")
+def render_logic_error(error: pd.Series, error_key: str, id_col: str):
+    """Render logic error correction form - Now handles 'reason' column instead of 'Troster Value'"""
+    st.markdown(f"### 📊 {error['variable']}")
     
+    # Get the reason text (new format)
+    reason_col = get_reason_column(pd.DataFrame([error]))
+    reason_text = error.get(reason_col, error.get('reason', 'No reason specified')) if reason_col else error.get('reason', 'No reason specified')
+    
+    # Get current value
     try:
-        farmer_value = int(discrepancy['value'])
-        troster_value = int(discrepancy['Troster Value'])
+        current_value = int(float(error['value']))
     except:
-        farmer_value = 0
-        troster_value = 0
+        current_value = 0
     
-    difference = farmer_value - troster_value
+    # Extract expected range from reason text
+    min_val, max_val = extract_constraint_limits(str(reason_text))
     
-    # Show comparison
-    col1, col2, col3 = st.columns(3)
+    # Display current value and rule
+    col1, col2 = st.columns([3, 2])
     
     with col1:
-        st.metric("Your Report", farmer_value)
+        st.info(f"**Current Value:** {error['value']}")
+        st.caption(f"**Issue:** {reason_text}")
+        if min_val != 0 or max_val != 100000:
+            st.caption(f"💡 Expected range: {min_val} - {max_val}")
+    
     with col2:
-        st.metric("System Record", troster_value)
-    with col3:
-        st.metric("Difference", difference, delta=difference)
+        # Correction input - NO RESTRICTIONS
+        correct_value = st.number_input(
+            "Corrected Value",
+            value=current_value,
+            step=1,
+            key=f"value_{error_key}",
+            help="Enter the actual correct value after verification (no restrictions)"
+        )
     
-    # Correction input - NO RESTRICTIONS
-    correct_value = st.number_input(
-        "Corrected Value",
-        value=farmer_value,
-        step=1,
-        key=f"value_{error_key}",
-        help="Enter the actual correct value after verification (no restrictions)"
-    )
-    
-    # Show info about the discrepancy
-    if correct_value != farmer_value and correct_value != troster_value:
-        st.info(f"💡 Corrected value differs from both reported ({farmer_value}) and system ({troster_value}) values")
+    # Check if outside range
+    outside_range = False
+    if min_val != 0 or max_val != 100000:
+        if correct_value < min_val or correct_value > max_val:
+            st.warning(f"⚠️ Value is outside expected range ({min_val}-{max_val}). Please explain why in detail below.")
+            outside_range = True
     
     explanation = st.text_area(
         "📝 Explanation (Required)",
-        placeholder="Why is there a difference? What did you verify with the farmer? Explain the correct value.",
+        placeholder="Why is this the correct value? What did you verify with the farmer?",
         key=f"explain_{error_key}",
         height=120
     )
@@ -856,16 +889,19 @@ def render_logic_error(discrepancy: pd.Series, error_key: str, id_col: str):
     # Store correction data
     st.session_state.all_corrections_data[error_key] = {
         'error_type': 'logic',
-        'error_data': discrepancy,
+        'error_data': error,
         'correct_value': correct_value,
         'explanation': explanation,
-        'differs_from_both': correct_value != farmer_value and correct_value != troster_value,
+        'outside_range': outside_range,
         'id_column': id_col
     }
     
     # Visual validation feedback
     if explanation and explanation.strip():
-        st.success("✅ Explanation provided")
+        if outside_range and len(explanation.strip()) < 20:
+            st.warning("⚠️ Out-of-range value requires detailed explanation (at least 20 characters)")
+        else:
+            st.success("✅ Explanation provided")
     else:
         st.error("❌ Explanation required before saving")
 
@@ -892,15 +928,21 @@ def save_farmer_corrections(farmer_id: str, selected_enumerator: str) -> bool:
         error_data = correction_data['error_data']
         id_col = correction_data.get('id_column', 'unique_id')
         
+        # Get column names dynamically
+        farmer_name_col = get_farmer_name_column(pd.DataFrame([error_data]))
+        phone_col = get_phone_column(pd.DataFrame([error_data]))
+        date_col = get_date_column(pd.DataFrame([error_data]))
+        reason_col = get_reason_column(pd.DataFrame([error_data]))
+        
         base_record = {
             'error_type': correction_data['error_type'],
             'username': error_data.get('username', ''),
-            'supervisor': error_data.get('supervisor', ''),
             'woreda': error_data.get('woreda', ''),
             'kebele': error_data.get('kebele', ''),
-            'farmer_name': error_data.get('farmer_name', ''),
-            'phone_no': error_data.get('phone_no', ''),
-            'subdate': error_data.get('subdate', ''),
+            'village': error_data.get('village', ''),
+            'farmer_name': error_data.get(farmer_name_col, '') if farmer_name_col else error_data.get('resp_name', error_data.get('farmer_name', '')),
+            'phone_no': error_data.get(phone_col, '') if phone_col else error_data.get('phone_no', ''),
+            'subdate': error_data.get(date_col, '') if date_col else error_data.get('startdate', error_data.get('subdate', '')),
             'unique_id': error_data.get(id_col, ''),
             'variable': error_data.get('variable', ''),
             'original_value': error_data.get('value', ''),
@@ -909,14 +951,14 @@ def save_farmer_corrections(farmer_id: str, selected_enumerator: str) -> bool:
             'corrected_by': selected_enumerator,
             'correction_date': datetime.now().strftime("%d-%b-%y"),
             'correction_timestamp': datetime.now().isoformat(),
-            'outside_range': correction_data.get('outside_range', False),
-            'differs_from_both': correction_data.get('differs_from_both', False)
+            'outside_range': correction_data.get('outside_range', False)
         }
         
-        if correction_data['error_type'] == 'constraint':
-            base_record['reference_value'] = error_data.get('constraint', '')
+        # Get reference value (constraint or reason)
+        if reason_col:
+            base_record['reference_value'] = error_data.get(reason_col, '')
         else:
-            base_record['reference_value'] = error_data.get('Troster Value', '')
+            base_record['reference_value'] = error_data.get('reason', error_data.get('constraint', ''))
         
         corrections.append(base_record)
     
@@ -940,7 +982,7 @@ def save_farmer_corrections(farmer_id: str, selected_enumerator: str) -> bool:
 
 def render_enumerator_login():
     """Render enumerator login page"""
-    st.title("🔐 ET South HFC Login")
+    st.title("🔐 ET Coffee HFC Login")
     st.markdown("---")
     
     col1, col2 = st.columns(2)
@@ -1018,7 +1060,7 @@ def render_enumerator_login():
 
 def render_admin_dashboard(constraints_df: pd.DataFrame, logic_df: pd.DataFrame):
     """Render admin dashboard with enhanced analytics"""
-    st.title("📊 ET South HFC - Admin Dashboard")
+    st.title("📊 ET Coffee HFC - Admin Dashboard")
     
     # Logout button
     col1, col2 = st.columns([6, 1])
@@ -1071,14 +1113,12 @@ def render_admin_dashboard(constraints_df: pd.DataFrame, logic_df: pd.DataFrame)
     st.subheader("👥 Error Rate by Enumerator")
     
     if not analysis['error_rate_by_enumerator'].empty:
-        # Display as interactive table
         st.dataframe(
             analysis['error_rate_by_enumerator'],
             use_container_width=True,
             height=400
         )
         
-        # Visualization
         col1, col2 = st.columns(2)
         
         with col1:
@@ -1145,7 +1185,6 @@ def render_admin_dashboard(constraints_df: pd.DataFrame, logic_df: pd.DataFrame)
     if not analysis['strange_values'].empty:
         st.warning(f"**{len(analysis['strange_values'])} suspicious values** detected that need attention:")
         
-        # Filter options
         strange_type_filter = st.multiselect(
             "Filter by type:",
             options=analysis['strange_values']['Type'].unique(),
@@ -1162,12 +1201,11 @@ def render_admin_dashboard(constraints_df: pd.DataFrame, logic_df: pd.DataFrame)
             height=300
         )
         
-        # Download strange values
         csv_strange = filtered_strange.to_csv(index=False)
         st.download_button(
             label="📥 Download Strange Values Report",
             data=csv_strange,
-            file_name=f"strange_values_{datetime.now().strftime('%Y%m%d')}.csv",
+            file_name=f"strange_values_coffee_{datetime.now().strftime('%Y%m%d')}.csv",
             mime='text/csv'
         )
     else:
@@ -1208,20 +1246,12 @@ def render_admin_dashboard(constraints_df: pd.DataFrame, logic_df: pd.DataFrame)
         )
     
     st.markdown("---")
-    st.markdown("---")
-    
-    # ========== EXISTING SECTIONS BELOW ==========
     
     # Get statistics
     stats_df = get_enumerator_statistics(constraints_df, logic_df)
     
-    # Overall metrics
-    total_enumerators = len(VALID_ENUMERATORS)
-    active_enumerators = len(stats_df[stats_df['Total Errors'] > 0])
     total_errors = stats_df['Total Errors'].sum()
     total_solved = stats_df['Solved'].sum()
-    total_remaining = stats_df['Remaining'].sum()
-    overall_progress = (total_solved / total_errors * 100) if total_errors > 0 else 0
     
     # Overall progress
     st.subheader("📈 Overall Progress")
@@ -1232,7 +1262,6 @@ def render_admin_dashboard(constraints_df: pd.DataFrame, logic_df: pd.DataFrame)
     # Enumerator-wise statistics
     st.subheader("👥 Enumerator Statistics")
     
-    # Filter options
     filter_col1, filter_col2 = st.columns(2)
     
     with filter_col1:
@@ -1245,12 +1274,10 @@ def render_admin_dashboard(constraints_df: pd.DataFrame, logic_df: pd.DataFrame)
             index=0
         )
     
-    # Apply filters
     display_df = stats_df.copy()
     if not show_all:
         display_df = display_df[display_df['Total Errors'] > 0]
     
-    # Apply sorting
     if sort_by == "Remaining (High to Low)":
         display_df = display_df.sort_values('Remaining', ascending=False)
     elif sort_by == "Progress (%)":
@@ -1260,7 +1287,6 @@ def render_admin_dashboard(constraints_df: pd.DataFrame, logic_df: pd.DataFrame)
     elif sort_by == "Total Errors":
         display_df = display_df.sort_values('Total Errors', ascending=False)
     
-    # Display enumerator cards
     for idx, row in display_df.iterrows():
         with st.expander(f"👤 {row['Username']} - {row['Remaining']} remaining ({row['Progress (%)']}% complete)", expanded=False):
             col1, col2, col3, col4 = st.columns(4)
@@ -1274,7 +1300,6 @@ def render_admin_dashboard(constraints_df: pd.DataFrame, logic_df: pd.DataFrame)
             with col4:
                 st.metric("Progress", f"{row['Progress (%)']}%")
             
-            # Progress bar for this enumerator
             render_progress_bar(row['Solved'], row['Total Errors'])
     
     st.markdown("---")
@@ -1284,14 +1309,13 @@ def render_admin_dashboard(constraints_df: pd.DataFrame, logic_df: pd.DataFrame)
     
     try:
         headers = get_github_headers()
-        corrections_url = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/contents/corrections_south.csv"
+        corrections_url = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/contents/{CORRECTIONS_FILE}"
         response = requests.get(corrections_url, headers=headers)
         
         if response.status_code == 200:
             corrections_content = base64.b64decode(response.json()['content']).decode('utf-8')
             all_corrections = pd.read_csv(io.StringIO(corrections_content))
             
-            # Filters
             filter_col1, filter_col2, filter_col3 = st.columns(3)
             
             with filter_col1:
@@ -1311,7 +1335,6 @@ def render_admin_dashboard(constraints_df: pd.DataFrame, logic_df: pd.DataFrame)
             with filter_col3:
                 show_flagged = st.checkbox("Show flagged corrections only", value=False)
             
-            # Apply filters
             filtered_df = all_corrections.copy()
             if selected_enumerator:
                 filtered_df = filtered_df[filtered_df['corrected_by'].isin(selected_enumerator)]
@@ -1320,7 +1343,6 @@ def render_admin_dashboard(constraints_df: pd.DataFrame, logic_df: pd.DataFrame)
             if 'outside_range' in filtered_df.columns and show_flagged:
                 filtered_df = filtered_df[filtered_df['outside_range'] == True]
             
-            # Display data
             st.markdown(f"**Showing {len(filtered_df)} of {len(all_corrections)} corrections**")
             
             st.dataframe(
@@ -1329,13 +1351,11 @@ def render_admin_dashboard(constraints_df: pd.DataFrame, logic_df: pd.DataFrame)
                 height=400
             )
             
-            # Statistics about flagged items
             if 'outside_range' in all_corrections.columns:
                 out_of_range_count = all_corrections['outside_range'].sum()
                 if out_of_range_count > 0:
-                    st.warning(f"⚠️ {out_of_range_count} corrections have values outside expected constraints")
+                    st.warning(f"⚠️ {out_of_range_count} corrections have values outside expected range")
             
-            # Download options
             st.markdown("---")
             st.subheader("💾 Download Data")
             
@@ -1346,7 +1366,7 @@ def render_admin_dashboard(constraints_df: pd.DataFrame, logic_df: pd.DataFrame)
                 st.download_button(
                     label="📥 Download Filtered Data",
                     data=csv,
-                    file_name=f"corrections_filtered_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+                    file_name=f"corrections_coffee_filtered_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
                     mime='text/csv',
                     use_container_width=True
                 )
@@ -1356,7 +1376,7 @@ def render_admin_dashboard(constraints_df: pd.DataFrame, logic_df: pd.DataFrame)
                 st.download_button(
                     label="📥 Download All Corrections",
                     data=csv_all,
-                    file_name=f"corrections_all_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+                    file_name=f"corrections_coffee_all_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
                     mime='text/csv',
                     use_container_width=True
                 )
@@ -1366,7 +1386,7 @@ def render_admin_dashboard(constraints_df: pd.DataFrame, logic_df: pd.DataFrame)
                 st.download_button(
                     label="📥 Download Statistics",
                     data=stats_csv,
-                    file_name=f"enumerator_stats_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+                    file_name=f"enumerator_stats_coffee_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
                     mime='text/csv',
                     use_container_width=True
                 )
@@ -1386,10 +1406,9 @@ def render_enumerator_interface(constraints_df: pd.DataFrame, logic_df: pd.DataF
     
     selected_enumerator = st.session_state.selected_enumerator
     
-    st.title("🌱 ET South HFC Data Correction")
+    st.title("☕ ET Coffee HFC Data Correction")
     st.markdown(f"### Welcome, **{selected_enumerator}**")
     
-    # Logout button
     col1, col2 = st.columns([6, 1])
     with col2:
         if st.button("🚪 Logout", type="secondary", use_container_width=True):
@@ -1409,10 +1428,9 @@ def render_enumerator_interface(constraints_df: pd.DataFrame, logic_df: pd.DataF
         st.info("Available columns in logic: " + str(list(logic_df.columns) if logic_df is not None else "N/A"))
         return
     
-    # Use the first valid ID column found
     id_col = constraint_id_col if constraint_id_col else logic_id_col
     
-    # Filter data - now checks both session state and GitHub
+    # Filter data
     enumerator_constraints = filter_uncorrected_errors(
         constraints_df[constraints_df['username'] == selected_enumerator] if constraints_df is not None else pd.DataFrame(),
         'constraint',
@@ -1431,7 +1449,6 @@ def render_enumerator_interface(constraints_df: pd.DataFrame, logic_df: pd.DataF
         safe_get_unique_ids(enumerator_logic)
     )
     
-    # Summary metrics
     if len(all_farmers_with_errors) == 0:
         st.success("🎉 All errors corrected! No pending issues.")
         st.balloons()
@@ -1439,7 +1456,6 @@ def render_enumerator_interface(constraints_df: pd.DataFrame, logic_df: pd.DataF
     
     total_errors = len(enumerator_constraints) + len(enumerator_logic)
     
-    # Count already saved corrections
     existing_corrections = load_existing_corrections()
     saved_count = 0
     if existing_corrections is not None:
@@ -1456,7 +1472,6 @@ def render_enumerator_interface(constraints_df: pd.DataFrame, logic_df: pd.DataF
     
     st.markdown("---")
     
-    # Error type filter
     error_filter = st.radio(
         "Filter by error type:",
         options=["All", "Constraints Only", "Logic Only"],
@@ -1465,7 +1480,6 @@ def render_enumerator_interface(constraints_df: pd.DataFrame, logic_df: pd.DataF
     
     st.markdown("---")
     
-    # Process each farmer
     st.subheader("📞 Call Farmers & Correct Errors")
     st.caption("Complete corrections for each farmer and save individually, or save all at once")
     
@@ -1478,7 +1492,6 @@ def render_enumerator_interface(constraints_df: pd.DataFrame, logic_df: pd.DataF
             enumerator_logic[id_col] == farmer_id
         ] if len(enumerator_logic) > 0 else pd.DataFrame()
         
-        # Apply filter
         if error_filter == "Constraints Only" and len(farmer_constraint_errors) == 0:
             continue
         if error_filter == "Logic Only" and len(farmer_logic_errors) == 0:
@@ -1487,27 +1500,25 @@ def render_enumerator_interface(constraints_df: pd.DataFrame, logic_df: pd.DataF
         total_farmer_errors = len(farmer_constraint_errors) + len(farmer_logic_errors)
         
         if total_farmer_errors > 0:
-            # Get farmer info
+            # Get farmer info dynamically
             farmer_name = ""
             phone_no = ""
             
-            if len(farmer_constraint_errors) > 0:
-                farmer_name = farmer_constraint_errors.iloc[0].get('farmer_name', 'Unknown')
-                phone_no = farmer_constraint_errors.iloc[0].get('phone_no', 'N/A')
-            elif len(farmer_logic_errors) > 0:
-                farmer_name = farmer_logic_errors.iloc[0].get('farmer_name', 'Unknown')
-                phone_no = farmer_logic_errors.iloc[0].get('phone_no', 'N/A')
+            sample_df = farmer_constraint_errors if len(farmer_constraint_errors) > 0 else farmer_logic_errors
+            if len(sample_df) > 0:
+                farmer_name_col = get_farmer_name_column(sample_df)
+                phone_col = get_phone_column(sample_df)
+                
+                farmer_name = sample_df.iloc[0].get(farmer_name_col, 'Unknown') if farmer_name_col else sample_df.iloc[0].get('resp_name', sample_df.iloc[0].get('farmer_name', 'Unknown'))
+                phone_no = sample_df.iloc[0].get(phone_col, 'N/A') if phone_col else sample_df.iloc[0].get('phone_no', 'N/A')
             
-            # Check how many corrections are ready for this farmer
             is_farmer_valid, farmer_missing, farmer_completed, farmer_total = validate_farmer_corrections(farmer_id)
             
-            # Render farmer section
             with st.expander(f"👨‍🌾 {farmer_name} 📞 {phone_no}", expanded=False):
                 render_farmer_header(farmer_name, phone_no, total_farmer_errors, farmer_completed)
                 
                 st.markdown("---")
                 
-                # Process constraint errors
                 if len(farmer_constraint_errors) > 0:
                     st.markdown("#### 🔒 Constraint Errors")
                     for idx, error in farmer_constraint_errors.iterrows():
@@ -1515,15 +1526,13 @@ def render_enumerator_interface(constraints_df: pd.DataFrame, logic_df: pd.DataF
                         render_constraint_error(error, error_key, id_col)
                         st.markdown("---")
                 
-                # Process logic errors
                 if len(farmer_logic_errors) > 0:
-                    st.markdown("#### 📊 Logic Discrepancies")
-                    for idx, discrepancy in farmer_logic_errors.iterrows():
-                        error_key = f"logic_{discrepancy[id_col]}_{discrepancy['variable']}"
-                        render_logic_error(discrepancy, error_key, id_col)
+                    st.markdown("#### 📊 Logic Errors")
+                    for idx, error in farmer_logic_errors.iterrows():
+                        error_key = f"logic_{error[id_col]}_{error['variable']}"
+                        render_logic_error(error, error_key, id_col)
                         st.markdown("---")
                 
-                # Individual farmer save button
                 st.markdown("---")
                 
                 if is_farmer_valid:
@@ -1532,7 +1541,6 @@ def render_enumerator_interface(constraints_df: pd.DataFrame, logic_df: pd.DataF
                             if save_farmer_corrections(farmer_id, selected_enumerator):
                                 st.success(f"✅ Saved {farmer_completed} corrections for {farmer_name}!")
                                 st.balloons()
-                                # Clear cache to reload data
                                 load_data_from_github.clear()
                                 st.rerun()
                             else:
@@ -1547,7 +1555,6 @@ def render_enumerator_interface(constraints_df: pd.DataFrame, logic_df: pd.DataF
     st.markdown("---")
     st.header("💾 Save All Remaining Corrections")
     
-    # Show overall progress
     is_valid, missing_list, completed, total = validate_corrections()
     render_progress_bar(completed, total)
     
@@ -1557,7 +1564,6 @@ def render_enumerator_interface(constraints_df: pd.DataFrame, logic_df: pd.DataF
             for item in missing_list:
                 st.write(f"• {item}")
     
-    # Save all button
     save_button_type = "primary" if is_valid else "secondary"
     
     if st.button("✅ Save All Completed Corrections", type=save_button_type, use_container_width=True, disabled=(completed == 0)):
@@ -1565,38 +1571,36 @@ def render_enumerator_interface(constraints_df: pd.DataFrame, logic_df: pd.DataF
             st.error("No completed corrections to save")
             st.stop()
         
-        # Prepare only completed corrections
         corrections = []
         keys_to_remove = []
         
         for error_key, correction_data in st.session_state.all_corrections_data.items():
             explanation = correction_data.get('explanation', '').strip()
             
-            # Skip if no explanation
             if not explanation:
                 continue
             
-            # Skip if out of range without detailed explanation
             if correction_data.get('outside_range', False) and len(explanation) < 20:
                 continue
             
-            # Skip if differs from both without good explanation
-            if correction_data.get('differs_from_both', False) and len(explanation) < 15:
-                continue
-            
-            # This correction is valid, include it
             error_data = correction_data['error_data']
             id_col = correction_data.get('id_column', 'unique_id')
+            
+            # Get column names dynamically
+            farmer_name_col = get_farmer_name_column(pd.DataFrame([error_data]))
+            phone_col = get_phone_column(pd.DataFrame([error_data]))
+            date_col = get_date_column(pd.DataFrame([error_data]))
+            reason_col = get_reason_column(pd.DataFrame([error_data]))
             
             base_record = {
                 'error_type': correction_data['error_type'],
                 'username': error_data.get('username', ''),
-                'supervisor': error_data.get('supervisor', ''),
                 'woreda': error_data.get('woreda', ''),
                 'kebele': error_data.get('kebele', ''),
-                'farmer_name': error_data.get('farmer_name', ''),
-                'phone_no': error_data.get('phone_no', ''),
-                'subdate': error_data.get('subdate', ''),
+                'village': error_data.get('village', ''),
+                'farmer_name': error_data.get(farmer_name_col, '') if farmer_name_col else error_data.get('resp_name', error_data.get('farmer_name', '')),
+                'phone_no': error_data.get(phone_col, '') if phone_col else error_data.get('phone_no', ''),
+                'subdate': error_data.get(date_col, '') if date_col else error_data.get('startdate', error_data.get('subdate', '')),
                 'unique_id': error_data.get(id_col, ''),
                 'variable': error_data.get('variable', ''),
                 'original_value': error_data.get('value', ''),
@@ -1605,14 +1609,14 @@ def render_enumerator_interface(constraints_df: pd.DataFrame, logic_df: pd.DataF
                 'corrected_by': selected_enumerator,
                 'correction_date': datetime.now().strftime("%d-%b-%y"),
                 'correction_timestamp': datetime.now().isoformat(),
-                'outside_range': correction_data.get('outside_range', False),
-                'differs_from_both': correction_data.get('differs_from_both', False)
+                'outside_range': correction_data.get('outside_range', False)
             }
             
-            if correction_data['error_type'] == 'constraint':
-                base_record['reference_value'] = error_data.get('constraint', '')
+            # Get reference value (constraint or reason)
+            if reason_col:
+                base_record['reference_value'] = error_data.get(reason_col, '')
             else:
-                base_record['reference_value'] = error_data.get('Troster Value', '')
+                base_record['reference_value'] = error_data.get('reason', error_data.get('constraint', ''))
             
             corrections.append(base_record)
             keys_to_remove.append(error_key)
@@ -1627,13 +1631,11 @@ def render_enumerator_interface(constraints_df: pd.DataFrame, logic_df: pd.DataF
                         st.info(f"📝 {total - completed} items still need attention and were not saved.")
                     st.balloons()
                     
-                    # Mark as corrected and remove from pending
                     for error_key in keys_to_remove:
                         st.session_state.corrected_errors.add(error_key)
                         if error_key in st.session_state.all_corrections_data:
                             del st.session_state.all_corrections_data[error_key]
                     
-                    # Clear cache to reload data
                     load_data_from_github.clear()
                     st.rerun()
                 else:
@@ -1648,17 +1650,14 @@ def render_enumerator_interface(constraints_df: pd.DataFrame, logic_df: pd.DataF
 def main():
     """Main application entry point"""
     
-    # Check if user is authenticated
     if not st.session_state.is_authenticated:
         render_enumerator_login()
         return
     
-    # Check token validity
     with st.spinner("Verifying access..."):
         if not check_token_validity():
             st.stop()
     
-    # Load data
     with st.spinner("Loading data from secure repository..."):
         constraints_df, logic_df = load_data_from_github()
     
@@ -1673,16 +1672,14 @@ def main():
         """)
         st.stop()
     
-    # Route to appropriate interface
     if st.session_state.is_admin:
         render_admin_dashboard(constraints_df, logic_df)
     else:
         render_enumerator_interface(constraints_df, logic_df)
     
-    # Footer
     st.markdown("---")
     st.markdown(
-        "<p style='text-align: center; color: #666;'>📱 ET South HFC Correction System v2.0 | "
+        "<p style='text-align: center; color: #666;'>☕ ET Coffee HFC Correction System v2.0 | "
         f"Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M')}</p>",
         unsafe_allow_html=True
     )
