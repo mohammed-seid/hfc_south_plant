@@ -33,7 +33,7 @@ CONSTRAINTS_FILE = "constraints_papaya.csv"
 LOGIC_FILE = "logic_papaya.csv"
 CORRECTIONS_FILE = "corrections_papaya.csv"
 
-# ========== UPDATED ENUMERATOR LIST (Only 4 enumerators) ==========
+# ========== UPDATED ENUMERATOR LIST (Only 5 enumerators) ==========
 VALID_ENUMERATORS = [
     "asfaw.m",
     "henok",
@@ -283,7 +283,7 @@ def save_corrections_to_github(corrections_df: pd.DataFrame) -> bool:
         
         # Prepare payload
         payload = {
-            "message": f"Add coffee corrections - {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+            "message": f"Add papaya corrections - {datetime.now().strftime('%Y-%m-%d %H:%M')}",
             "content": encoded_data,
             "branch": "main"
         }
@@ -1015,7 +1015,7 @@ def save_farmer_corrections(farmer_id: str, selected_enumerator: str) -> bool:
 
 def render_enumerator_login():
     """Render enumerator login page"""
-    st.title("🔐 ET Coffee HFC Login")
+    st.title("🔐 ET Papaya HFC Login")
     st.markdown("---")
     
     col1, col2 = st.columns(2)
@@ -1093,7 +1093,7 @@ def render_enumerator_login():
 
 def render_admin_dashboard(constraints_df: pd.DataFrame, logic_df: pd.DataFrame):
     """Render admin dashboard with enhanced analytics"""
-    st.title("📊 ET Coffee HFC - Admin Dashboard")
+    st.title("📊 ET Papaya HFC - Admin Dashboard")
     
     col1, col2 = st.columns([6, 1])
     with col2:
@@ -1231,7 +1231,7 @@ def render_admin_dashboard(constraints_df: pd.DataFrame, logic_df: pd.DataFrame)
         st.download_button(
             label="📥 Download Strange Values Report",
             data=csv_strange,
-            file_name=f"strange_values_coffee_{datetime.now().strftime('%Y%m%d')}.csv",
+            file_name=f"strange_values_papaya_{datetime.now().strftime('%Y%m%d')}.csv",
             mime='text/csv'
         )
     else:
@@ -1387,7 +1387,7 @@ def render_admin_dashboard(constraints_df: pd.DataFrame, logic_df: pd.DataFrame)
                 st.download_button(
                     label="📥 Download Filtered Data",
                     data=csv,
-                    file_name=f"corrections_coffee_filtered_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+                    file_name=f"corrections_papaya_filtered_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
                     mime='text/csv',
                     use_container_width=True
                 )
@@ -1397,7 +1397,7 @@ def render_admin_dashboard(constraints_df: pd.DataFrame, logic_df: pd.DataFrame)
                 st.download_button(
                     label="📥 Download All Corrections",
                     data=csv_all,
-                    file_name=f"corrections_coffee_all_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+                    file_name=f"corrections_papaya_all_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
                     mime='text/csv',
                     use_container_width=True
                 )
@@ -1407,7 +1407,7 @@ def render_admin_dashboard(constraints_df: pd.DataFrame, logic_df: pd.DataFrame)
                 st.download_button(
                     label="📥 Download Statistics",
                     data=stats_csv,
-                    file_name=f"enumerator_stats_coffee_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+                    file_name=f"enumerator_stats_papaya_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
                     mime='text/csv',
                     use_container_width=True
                 )
@@ -1427,7 +1427,7 @@ def render_enumerator_interface(constraints_df: pd.DataFrame, logic_df: pd.DataF
     
     selected_enumerator = st.session_state.selected_enumerator
     
-    st.title("☕ ET Coffee HFC Data Correction")
+    st.title("☕ ET Papaya HFC Data Correction")
     st.markdown(f"### Welcome, **{selected_enumerator}**")
     
     col1, col2 = st.columns([6, 1])
@@ -1708,7 +1708,7 @@ def main():
     
     st.markdown("---")
     st.markdown(
-        "<p style='text-align: center; color: #666;'>☕ ET Coffee HFC Correction System v2.0 | "
+        "<p style='text-align: center; color: #666;'>☕ ET Papaya HFC Correction System v2.0 | "
         f"Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M')}</p>",
         unsafe_allow_html=True
     )
