@@ -38,7 +38,7 @@ VALID_ENUMERATORS = [
     "asfaw.m",
     "henok",
     "asfaw.f",
-    "abrham",
+    "abreham",
     "tigist.p"
 ]
 
