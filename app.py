@@ -12,11 +12,11 @@ from typing import Tuple, Optional, List, Dict
 # ============================================================================
 
 st.set_page_config(
-    page_title="ET Coffee HFC Data Correction",
+    page_title="ET Papaya HFC Data Correction",
     layout="wide",
     initial_sidebar_state="collapsed",
     menu_items={
-        'About': "ET Coffee HFC Data Correction System v2.0"
+        'About': "ET Papaya HFC Data Correction System v2.0"
     }
 )
 
@@ -29,16 +29,17 @@ ENUMERATOR_PASSWORD = "1234"
 CACHE_TTL = 3600  # 1 hour
 
 # ========== FILE NAMES ==========
-CONSTRAINTS_FILE = "constraints_coffee.csv"
-LOGIC_FILE = "logic_coffee.csv"
-CORRECTIONS_FILE = "corrections_coffee.csv"
+CONSTRAINTS_FILE = "constraints_papaya.csv"
+LOGIC_FILE = "logic_papaya.csv"
+CORRECTIONS_FILE = "corrections_papaya.csv"
 
 # ========== UPDATED ENUMERATOR LIST (Only 4 enumerators) ==========
 VALID_ENUMERATORS = [
     "asfaw.m",
     "henok",
     "asfaw.f",
-    "abrham.a"
+    "abrham",
+    "tigist.p"
 ]
 
 # ============================================================================
